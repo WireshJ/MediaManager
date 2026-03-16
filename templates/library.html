@@ -48,7 +48,7 @@
       {% if films %}
       <div class="poster-grid" id="film-grid">
         {% for film in films %}
-        {% set display = film.info.title if film.info.title else film.path | basename | replace('.strm','') %}
+        {% set display = film.info.title if film.info.title else film.path | display_name | replace('.strm','') %}
         <div class="poster-card" onclick="toggleFilm(this)">
           <input type="checkbox" name="selected_files" value="{{ film.path }}"
                  onchange="updateBar()" onclick="event.stopPropagation()">
@@ -137,7 +137,7 @@
                 <div class="episode-row" onclick="toggleEp(this,'{{ sid }}-card')">
                   <input type="checkbox" name="selected_files" value="{{ ep }}"
                          onchange="updateBar()" onclick="event.stopPropagation()">
-                  <label>{{ ep | basename | replace('.strm','') }}</label>
+                  <label>{{ ep | display_name | replace('.strm','') }}</label>
                 </div>
                 {% endfor %}
               </div>
@@ -261,11 +261,15 @@ async function runPostprocess(scope) {
       body: JSON.stringify({scope})
     }).then(r => r.json());
     if (d.ok) {
-      const r = d.results[scope] || {};
-      const renamed = (r.renamed || []).length;
-      const errors  = (r.errors  || []).length;
-      showToast(`✅ ${renamed} hernoemd${errors ? ' · ' + errors + ' fout(en)' : ''}`, 'success');
-      if (errors) console.warn('Postprocessing fouten:', r.errors);
+      if (d.info) {
+        showToast(`ℹ️ ${d.info}`, 'info');
+      } else {
+        const r = d.results[scope] || {};
+        const renamed = (r.renamed || []).length;
+        const errors  = (r.errors  || []).length;
+        showToast(`✅ ${renamed} hernoemd${errors ? ' · ' + errors + ' fout(en)' : ''}`, 'success');
+        if (errors) console.warn('Postprocessing fouten:', r.errors);
+      }
     } else showToast('❌ ' + d.error, 'error');
   } catch(e) { showToast('❌ Verzoek mislukt', 'error'); }
 }
