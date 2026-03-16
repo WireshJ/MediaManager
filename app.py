@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, json, re, datetime, threading, uuid, time, subprocess
+import os, json, re, datetime, threading, uuid, time, subprocess, shutil, tempfile, io
 from typing import Any, Dict, Optional, List
 from collections import defaultdict, OrderedDict
 from flask import Flask, render_template, request, redirect, url_for, jsonify, flash
@@ -9,9 +9,14 @@ import requests as _requests
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("APP_SECRET", "mediamanager-secret-2026")
 
-# Jinja2 filter voor bestandsnaam
+# ── Jinja2 filters ────────────────────────────────────────────────
 app.jinja_env.filters['basename'] = lambda p: Path(p).name
+app.jinja_env.filters['display_name'] = lambda p: (
+    Path(p.split("|")[1]).stem if "|" in p and p.startswith(("__smb__:", "__ftp__:"))
+    else Path(p).name
+)
 
+# ── Paden ─────────────────────────────────────────────────────────
 BASE_DIR  = Path(__file__).parent
 DATA_DIR  = Path(os.environ.get("DATA_DIR", BASE_DIR / "data"))
 CONF_FILE = DATA_DIR / "config.json"
@@ -19,12 +24,87 @@ CACHE_DIR = DATA_DIR / "cache"
 for d in [DATA_DIR, CACHE_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
+# ── Schoonmaak bij opstarten ──────────────────────────────────────
+def _startup_cleanup():
+    """
+    Ruimt alle tijdelijke bestanden op bij opstarten.
+    Voorkomt dat een herstart rommel achterlaat (bijv. halverwege gedownloade films).
+    """
+    cleaned = 0
+
+    # 1. Vaste tijdelijke mappen volledig weggooien
+    for name in ("tmp_work", "tmp_strm", "smb_cache", "ftp_cache"):
+        p = DATA_DIR / name
+        if p.exists():
+            try:
+                shutil.rmtree(p)
+                print(f"[🧹] Map verwijderd: {p}")
+                cleaned += 1
+            except Exception as e:
+                print(f"[!] Cleanup fout {p}: {e}")
+
+    # 2. Losse tijdelijke bestanden in DATA_DIR (mm_*, *.tmp, *.part, *.ytdl)
+    for pattern in ("mm_*", "*.tmp", "*.part", "*.ytdl"):
+        for f in DATA_DIR.glob(pattern):
+            try:
+                if f.is_file():
+                    f.unlink(); cleaned += 1
+                elif f.is_dir():
+                    shutil.rmtree(f); cleaned += 1
+                print(f"[🧹] Verwijderd: {f.name}")
+            except Exception as e:
+                print(f"[!] Cleanup fout {f}: {e}")
+
+    # 3. Incomplete yt-dlp downloads (*.part, *.ytdl dieper genest)
+    for pattern in ("*.part", "*.ytdl"):
+        for f in DATA_DIR.rglob(pattern):
+            try: f.unlink(); cleaned += 1
+            except Exception: pass
+
+    # 4. Xtream API cache opschonen
+    if CACHE_DIR.exists():
+        now = datetime.datetime.now(datetime.timezone.utc)
+        for f in CACHE_DIR.glob("*.json"):
+            try:
+                age_days = (now - datetime.datetime.fromtimestamp(
+                    f.stat().st_mtime, tz=datetime.timezone.utc)).days
+                # Serie-detail caches (series_12345.json) na 3 dagen weg
+                # Hoofd-caches (live.json, movies.json, series.json) na 7 dagen weg
+                max_age = 3 if f.stem.startswith("series_") else 7
+                if age_days > max_age:
+                    f.unlink()
+                    print(f"[🧹] Cache verlopen: {f.name} ({age_days}d oud)")
+                    cleaned += 1
+            except Exception: pass
+
+    # 5. TMDB cache beperken tot max 2000 entries (LRU: verwijder oudste)
+    tmdb_file = DATA_DIR / ".tmdb_cache.json"
+    if tmdb_file.exists():
+        try:
+            data = json.loads(tmdb_file.read_text())
+            if len(data) > 2000:
+                # Bewaar de laatste 1500 entries (geen timestamp, dus op volgorde)
+                trimmed = dict(list(data.items())[-1500:])
+                tmdb_file.write_text(json.dumps(trimmed, ensure_ascii=False))
+                removed = len(data) - len(trimmed)
+                print(f"[🧹] TMDB cache ingekort: {removed} entries verwijderd ({len(trimmed)} bewaard)")
+                cleaned += 1
+        except Exception as e:
+            print(f"[!] TMDB cache cleanup fout: {e}")
+
+    if cleaned:
+        print(f"[🧹] Startup cleanup klaar: {cleaned} item(s) verwijderd")
+    else:
+        print("[🧹] Startup cleanup: niets te verwijderen")
+
+_startup_cleanup()
+
+# ── Config ────────────────────────────────────────────────────────
 DEFAULT_CONF: Dict[str, Any] = {
     "xtream":  {"server":"","port":0,"user":"","pwd":"","verify_tls":True,"timeout":15},
     "output":  {"base":"/media/library","live":"Live","movies":"Movies","series":"Series"},
     "ext":     {"live":"ts","movie":None,"episode":None},
     "cache":   {"ttl_hours":6},
-    # storage_mode: "mount" | "smb" | "ftp"
     "storage": {
         "mode": "mount",
         "smb":  {"host":"","share":"","user":"","password":"","domain":"","films_path":"Films","series_path":"Series"},
@@ -35,16 +115,25 @@ DEFAULT_CONF: Dict[str, Any] = {
     "opensubtitles":{"enabled":False,"api_key":"","username":"","password":"","langs":["nl","en"]},
 }
 
+def _deep_merge(default: dict, saved: dict) -> dict:
+    """Deep merge: saved overschrijft default, ook voor geneste dicts."""
+    result = dict(default)
+    for k, v in saved.items():
+        if k in result and isinstance(result[k], dict) and isinstance(v, dict):
+            result[k] = _deep_merge(result[k], v)
+        else:
+            result[k] = v
+    return result
+
 def load_conf() -> Dict[str, Any]:
     if CONF_FILE.exists():
         try:
             with open(CONF_FILE,"r",encoding="utf-8") as f:
                 saved = json.load(f)
-            return {k: ({**v,**(saved.get(k) or {})} if isinstance(v,dict) else saved.get(k,v))
-                    for k,v in DEFAULT_CONF.items()}
+            return _deep_merge(DEFAULT_CONF, saved)
         except Exception:
             pass
-    return {k:(dict(v) if isinstance(v,dict) else v) for k,v in DEFAULT_CONF.items()}
+    return _deep_merge(DEFAULT_CONF, {})
 
 def save_conf(cfg: Dict) -> None:
     CONF_FILE.parent.mkdir(parents=True,exist_ok=True)
@@ -92,23 +181,23 @@ class Xtream:
         d = self._get(self._url(action="get_user_info"))
         return (d.get("user_info") or {}) if isinstance(d,dict) else {}
 
-    def get_live_streams(self):   return self._get(self._url(action="get_live_streams")) or []
-    def get_vod_streams(self):    return self._get(self._url(action="get_vod_streams")) or []
-    def get_series(self):         return self._get(self._url(action="get_series")) or []
+    def get_live_streams(self):    return self._get(self._url(action="get_live_streams")) or []
+    def get_vod_streams(self):     return self._get(self._url(action="get_vod_streams")) or []
+    def get_series(self):          return self._get(self._url(action="get_series")) or []
     def get_series_info(self,sid): return self._get(self._url(action="get_series_info",series_id=sid)) or {}
-    def live_url(self,sid,ext="ts"):   return f"{self.base}/live/{self.user}/{self.pwd}/{sid}.{pick_ext(ext,'ts')}"
-    def vod_url(self,sid,ext="mp4"):   return f"{self.base}/movie/{self.user}/{self.pwd}/{sid}.{pick_ext(ext,'mp4')}"
+    def live_url(self,sid,ext="ts"):    return f"{self.base}/live/{self.user}/{self.pwd}/{sid}.{pick_ext(ext,'ts')}"
+    def vod_url(self,sid,ext="mp4"):    return f"{self.base}/movie/{self.user}/{self.pwd}/{sid}.{pick_ext(ext,'mp4')}"
     def episode_url(self,eid,ext="mp4"):return f"{self.base}/series/{self.user}/{self.pwd}/{eid}.{pick_ext(ext,'mp4')}"
 
 def make_api(cfg: Dict) -> Xtream:
     x = cfg["xtream"]
-    return Xtream(x["server"],x.get("port",0),x["user"],x["pwd"],int(x.get("timeout",15)),bool(x.get("verify_tls",True)))
+    return Xtream(x["server"],x.get("port",0),x["user"],x["pwd"],
+                  int(x.get("timeout",15)),bool(x.get("verify_tls",True)))
 
 # ── Cache ─────────────────────────────────────────────────────────
 _LOCK = threading.Lock()
 
 def _now_utc(): return datetime.datetime.now(datetime.timezone.utc)
-
 def _cf(name): return CACHE_DIR / re.sub(r"[^a-zA-Z0-9_.:-]+","_",name)
 
 def _rc(name):
@@ -165,10 +254,15 @@ def _tget(ep, params, key):
         return r.json() if r.ok else {}
     except Exception: return {}
 
-def _ctitle(fn):
+def _ctitle(fn: str):
+    """Extraheer zoektitel en jaar uit een bestandsnaam of display naam."""
+    # Fix Bug 5: virtuele paden correct afhandelen
+    if "|" in fn and fn.startswith(("__smb__:", "__ftp__:")):
+        fn = fn.split("|")[1]  # neem display naam na de pipe
     name = Path(fn).stem
     name = re.sub(r'[Ss]\d{1,2}[Ee]\d{1,3}.*','',name)
-    name = re.sub(r'\b(1080p|720p|4K|HDR|BluRay|WEBRip|HDTV|x264|x265|HEVC|REMUX|Remastered)\b.*','',name,flags=re.IGNORECASE)
+    name = re.sub(r'\b(1080p|720p|4K|HDR|BluRay|WEBRip|HDTV|x264|x265|HEVC|REMUX|Remastered)\b.*',
+                  '',name,flags=re.IGNORECASE)
     ym = re.search(r'\((\d{4})\)',name) or re.search(r'\.(\d{4})\.',name)
     year = ym.group(1) if ym else None
     name = re.sub(r'\(\d{4}\)','',name); name = re.sub(r'\.\d{4}\.','.',name)
@@ -268,16 +362,16 @@ def os_download(title, lang, dest, cfg, season=None, episode=None):
     except Exception as e:
         print(f"[!] OS sub ({lang}): {e}"); return False
 
-# ── Postprocessing (rename/sort logica uit de bash scripts) ───────
-_PFX_RE  = re.compile(
+# ── Postprocessing ────────────────────────────────────────────────
+_PFX_RE = re.compile(
     r'^(?:'
-    r'\|[A-Za-z]{2,4}\|\s*'           # |EN|, |NLD|
-    r'|[A-Za-z]{2,4}\s*-\s*'          # EN -, NL -
-    r'|[A-Za-z0-9+\-_]{2,12}\s*-\s*'  # 4K-, OSN+-, beQ-, etc.
-    r'|4K\s*[-–]\s*'                   # 4K -
+    r'\|[A-Za-z]{2,4}\|\s*'
+    r'|[A-Za-z]{2,4}\s*-\s*'
+    r'|[A-Za-z0-9+\-_]{2,12}\s*-\s*'
+    r'|4K\s*[-–]\s*'
     r')*'
 )
-_SFX_RE  = re.compile(r'\s*\([A-Za-z]{2}\)$')
+_SFX_RE = re.compile(r'\s*\([A-Za-z]{2}\)$')
 
 def strip_prefix(name: str) -> str:
     c = _PFX_RE.sub("", name).strip()
@@ -301,27 +395,39 @@ def safe_fn(s: str) -> str:
     s = re.sub(r'\s+'," ",s).strip()
     return re.sub(r'[\s.]+$',"",s)
 
+def _clean_strm_name(filename: str) -> str:
+    stem = Path(filename).stem
+    ext  = Path(filename).suffix
+    ep_match = re.search(r'[Ss](\d{1,2})[Ee](\d{1,3})', stem)
+    ep_code  = ep_match.group(0).upper() if ep_match else None
+    cleaned  = strip_prefix(stem)
+    cleaned  = re.sub(r'\s*\(\d{4}\)', '', cleaned).strip()
+    cleaned  = re.sub(r'\s*\([A-Z]{2}\)', '', cleaned).strip()
+    cleaned  = re.sub(r'\s*\b(4K|UHD|1080p|720p|HDR|SDR|BluRay|WEBRip|HDTV|x264|x265|HEVC|REMUX)\b.*',
+                      '', cleaned, flags=re.IGNORECASE).strip()
+    if ep_code:
+        cleaned = re.sub(r'\s*[Ss]\d{1,2}[Ee]\d{1,3}.*', '', cleaned).strip()
+        cleaned = f"{cleaned} {ep_code}"
+    cleaned = safe_fn(cleaned)
+    return cleaned + ext if cleaned else filename
+
 def postprocess_movies(cfg: Dict) -> dict:
     results = {"renamed":[],"skipped":[],"errors":[]}
     tmdb_key = cfg["tmdb"]["api_key"] if cfg["tmdb"].get("enabled") else ""
     movies_dir = out_path(cfg,"movies")
     if not movies_dir.exists():
         results["errors"].append(f"Map niet gevonden: {movies_dir}"); return results
-
     for folder in sorted(movies_dir.iterdir()):
         if not folder.is_dir(): continue
         folder_name = folder.name
         new_title   = None
-
         tmdb_id = extract_tmdb_id(folder_name)
         if tmdb_id and tmdb_key:
             info = tmdb_by_id(tmdb_id, tmdb_key)
             if info and info.get("title"):
                 new_title = safe_fn(info["title"])
-
         if not new_title:
             new_title = safe_fn(strip_prefix(folder_name))
-
         new_folder = movies_dir / new_title
         if folder != new_folder:
             if new_folder.exists():
@@ -335,8 +441,6 @@ def postprocess_movies(cfg: Dict) -> dict:
                     results["errors"].append(str(e)); continue
         else:
             results["skipped"].append(folder_name)
-
-        # Hernoem .strm bestanden in de map
         strms = list(folder.glob("*.strm"))
         for i,strm in enumerate(strms):
             tname = f"{new_title}.strm" if len(strms)==1 else f"{new_title} ({i+1}).strm"
@@ -344,8 +448,6 @@ def postprocess_movies(cfg: Dict) -> dict:
             if strm != tgt and not tgt.exists():
                 try: strm.rename(tgt)
                 except Exception: pass
-
-        # Hernoem overige bestanden (subs etc.)
         for f in folder.iterdir():
             if not f.is_file() or f.suffix == ".strm": continue
             cleaned = safe_fn(strip_prefix(f.name))
@@ -354,7 +456,6 @@ def postprocess_movies(cfg: Dict) -> dict:
                 if not tgt.exists():
                     try: f.rename(tgt)
                     except Exception: pass
-
     return results
 
 def postprocess_series(cfg: Dict) -> dict:
@@ -364,55 +465,38 @@ def postprocess_series(cfg: Dict) -> dict:
         results["errors"].append(f"Map niet gevonden: {series_dir}"); return results
 
     def _clean_folder_name(name: str) -> str:
-        """Strip prefix, jaar en landcode van een mapnaam."""
         n = safe_fn(strip_prefix(name))
         n = re.sub(r'\s*\(\d{4}\)', '', n).strip()
         n = re.sub(r'\s*\([A-Z]{2}\)$', '', n).strip()
         return safe_fn(n) or name
 
     def _rename_files_in(folder: Path, serie_clean: str):
-        """Hernoem alle bestanden in een map naar schone namen."""
         for f in sorted(folder.iterdir()):
             if not f.is_file(): continue
             if f.suffix == ".strm":
                 cleaned = _clean_strm_name(f.name)
                 ep_match = re.search(r'[Ss]\d{1,2}[Ee]\d{1,3}', cleaned)
-                if ep_match:
-                    ep_code      = ep_match.group(0).upper()
-                    cleaned_name = f"{serie_clean} {ep_code}.strm"
-                else:
-                    cleaned_name = cleaned
+                cleaned_name = (f"{serie_clean} {ep_match.group(0).upper()}.strm"
+                                if ep_match else cleaned)
             else:
-                # .mkv, .srt etc: strip prefix/jaar/landcode
                 stem = safe_fn(strip_prefix(f.stem))
                 stem = re.sub(r'\s*\(\d{4}\)', '', stem).strip()
                 stem = re.sub(r'\s*\([A-Za-z]{2}\)(\.|$)', r'\1', stem).strip()
                 cleaned_name = safe_fn(stem) + f.suffix
-
             if cleaned_name and cleaned_name != f.name:
                 tgt = folder / cleaned_name
                 if not tgt.exists():
                     try: f.rename(tgt)
                     except Exception: pass
 
-    # ── Stap 1: bereken doelmapnamen voor alle mappen ──────────────
-    # Doe dit vooraf zodat we weten welke mappen samengevoegd worden
-    plan: Dict[str, List[Path]] = {}  # doelnaam → lijst van bronmappen
+    plan: Dict[str, List[Path]] = {}
     for folder in sorted(series_dir.iterdir()):
         if not folder.is_dir(): continue
-        new_name = _clean_folder_name(folder.name)
-        plan.setdefault(new_name, []).append(folder)
+        plan.setdefault(_clean_folder_name(folder.name), []).append(folder)
 
-    # ── Stap 2: uitvoeren ──────────────────────────────────────────
     for new_name, folders in plan.items():
         new_folder = series_dir / new_name
-
-        # Sorteer: map die al de juiste naam heeft komt eerst
         folders.sort(key=lambda p: 0 if p.name == new_name else 1)
-
-        # Zorg dat de doelmap bestaat:
-        # - als een van de bronmappen al de juiste naam heeft → die is al de doelmap
-        # - anders → hernoem de eerste bronmap
         if not new_folder.exists():
             try:
                 folders[0].rename(new_folder)
@@ -421,45 +505,36 @@ def postprocess_series(cfg: Dict) -> dict:
             except Exception as e:
                 results["errors"].append(str(e)); continue
         else:
-            # Doelmap bestaat al (had al de juiste naam) → skip die uit de lijst
             folders = [f for f in folders if f != new_folder]
-
-        # Verplaats bestanden uit resterende bronmappen naar doelmap
-        for src_folder in folders:
-            if not src_folder.exists(): continue
+        for src in folders:
+            if not src.exists(): continue
             try:
-                for f in list(src_folder.iterdir()):
+                for f in list(src.iterdir()):
                     if not f.is_file(): continue
                     tgt = new_folder / f.name
-                    if not tgt.exists():
-                        f.rename(tgt)
-                    else:
-                        # Duplicate: bewaar kortste (schonere) naam
-                        if len(f.name) < len(tgt.name):
-                            tgt.unlink(); f.rename(tgt)
-                        else:
-                            f.unlink()
-                src_folder.rmdir()
-                results["renamed"].append(f"{src_folder.name} → {new_name} (samengevoegd)")
+                    if not tgt.exists(): f.rename(tgt)
+                    elif len(f.name) < len(tgt.name): tgt.unlink(); f.rename(tgt)
+                    else: f.unlink()
+                src.rmdir()
+                results["renamed"].append(f"{src.name} → {new_name} (samengevoegd)")
             except Exception as e:
-                results["errors"].append(f"Samenvoegen {src_folder.name}: {e}")
-
-        # Hernoem alle bestanden in de (nu volledige) doelmap
+                results["errors"].append(f"Samenvoegen {src.name}: {e}")
         if new_folder.exists():
             _rename_files_in(new_folder, new_name)
-
     return results
 
 # ── Lokale scanner ────────────────────────────────────────────────
-_S_FOLDER = re.compile(r'/(?:Season|Seizoen)[ _-]?(\d{1,2})/',re.IGNORECASE)
-_S_CODE   = re.compile(r'[Ss](\d{1,2})[Ee]\d{1,3}')
+_S_CODE = re.compile(r'[Ss](\d{1,2})[Ee]\d{1,3}')
 
 def detect_season(path):
-    for pat in [_S_FOLDER, _S_CODE]:
-        m = pat.search(path)
-        if m:
-            try: return int(m.group(1))
-            except ValueError: pass
+    m = re.search(r'/(?:Season|Seizoen)[ _-]?(\d{1,2})/', path, re.IGNORECASE)
+    if m:
+        try: return int(m.group(1))
+        except ValueError: pass
+    m = _S_CODE.search(path)
+    if m:
+        try: return int(m.group(1))
+        except ValueError: pass
     return "Specials"
 
 def group_seasons(eps):
@@ -472,9 +547,7 @@ def group_seasons(eps):
     return od
 
 def _extract_serie_name(filename: str) -> str:
-    """Extraheer seriename uit een bestandsnaam zoals 'Game of Thrones S01E01.strm'."""
     stem = Path(filename).stem
-    # Verwijder SxxExx en alles erna
     name = re.sub(r'\s*[Ss]\d{1,2}[Ee]\d{1,3}.*', '', stem).strip()
     return name or stem
 
@@ -490,260 +563,188 @@ def scan_local(cfg):
                 if f.endswith(".strm"):
                     stem = Path(f).stem.lower()
                     if stem not in seen_films:
-                        seen_films.add(stem)
-                        films.append(os.path.join(root,f))
+                        seen_films.add(stem); films.append(os.path.join(root,f))
     series_dict: Dict[str,List] = {}
     if sdir.exists():
         for root,_,files in os.walk(sdir):
             for f in files:
                 if f.endswith(".strm"):
                     rel = Path(root).relative_to(sdir).parts
-                    if rel:
-                        # Bestanden zitten in een submap → mapnaam is de seriename
-                        sname = rel[0]
-                    else:
-                        # Bestanden zitten plat in de series map → extraheer naam uit bestandsnaam
-                        sname = _extract_serie_name(f)
+                    sname = rel[0] if rel else _extract_serie_name(f)
                     series_dict.setdefault(sname,[]).append(os.path.join(root,f))
     return films, series_dict
 
-# ── Storage backend (mount / SMB / FTP) ──────────────────────────
-
+# ── Storage backend ───────────────────────────────────────────────
 def storage_mode(cfg: Dict) -> str:
     return cfg.get("storage", {}).get("mode", "mount")
 
 def _smb_cfg(cfg): return cfg.get("storage",{}).get("smb",{})
 def _ftp_cfg(cfg): return cfg.get("storage",{}).get("ftp",{})
 
-def storage_write_file(local_path: str, remote_subpath: str, cfg: Dict) -> bool:
-    """Schrijf een lokaal bestand naar de geconfigureerde storage backend.
-       remote_subpath bijv. 'Films/Titelnaam/Titelnaam.mkv'
+def storage_subdir(cfg: Dict, kind: str) -> str:
+    """
+    Geeft het juiste subpad terug voor films of series, afhankelijk van storage mode.
+    kind: 'movies'/'films' voor films, 'series' voor series.
+    Bij mount: gebruik cfg['output']['movies'] / cfg['output']['series']
+    Bij SMB:   gebruik smb films_path / series_path
+    Bij FTP:   gebruik ftp films_path / series_path
     """
     mode = storage_mode(cfg)
-    if mode == "mount":
-        # Al op de juiste plek, niets te doen
-        return True
-    elif mode == "smb":
-        return _smb_put(local_path, remote_subpath, cfg)
+    is_film = kind in ("movies", "films")
+    if mode == "smb":
+        s = _smb_cfg(cfg)
+        return s.get("films_path", "Films") if is_film else s.get("series_path", "Series")
     elif mode == "ftp":
-        return _ftp_put(local_path, remote_subpath, cfg)
+        f = _ftp_cfg(cfg)
+        return f.get("films_path", "/media/Films") if is_film else f.get("series_path", "/media/Series")
+    else:  # mount
+        return cfg["output"]["movies"] if is_film else cfg["output"]["series"]
+
+def storage_write_file(local_path: str, remote_subpath: str, cfg: Dict) -> bool:
+    mode = storage_mode(cfg)
+    if mode == "mount": return True
+    elif mode == "smb": return _smb_put(local_path, remote_subpath, cfg)
+    elif mode == "ftp": return _ftp_put(local_path, remote_subpath, cfg)
     return False
 
 def storage_list_strm(cfg: Dict) -> tuple[List[str], Dict[str,List[str]]]:
-    """Haal .strm bestanden op uit de geconfigureerde storage backend."""
     mode = storage_mode(cfg)
-    if mode == "mount":
-        return scan_local(cfg)
-    elif mode == "smb":
-        return _smb_list_strm(cfg)
-    elif mode == "ftp":
-        return _ftp_list_strm(cfg)
+    if mode == "mount": return scan_local(cfg)
+    elif mode == "smb": return _smb_list_strm(cfg)
+    elif mode == "ftp": return _ftp_list_strm(cfg)
     return [], {}
 
-def _clean_strm_name(filename: str) -> str:
-    """
-    Maak een bestandsnaam schoon:
-    - Strip prefixen zoals '4K-OSN+ - ', '|EN| ', 'EN - '
-    - Strip jaar  bijv. ' (2011)'
-    - Strip land  bijv. ' (US)'
-    - Behoudt SxxExx patroon
-    - Behoudt extensie
-    Voorbeeld: '4K-OSN+ - Game of Thrones (2011) (US) S01E01.strm'
-            → 'Game of Thrones S01E01.strm'
-    """
-    stem = Path(filename).stem
-    ext  = Path(filename).suffix
-
-    # Extraheer SxxExx code als die er in zit
-    ep_match = re.search(r'[Ss](\d{1,2})[Ee](\d{1,3})', stem)
-    ep_code  = ep_match.group(0).upper() if ep_match else None
-
-    # Verwijder alles vóór het eerste echte titelwoord (prefix cleaning)
-    cleaned = strip_prefix(stem)
-
-    # Verwijder jaar (2011), (2023) etc.
-    cleaned = re.sub(r'\s*\(\d{4}\)', '', cleaned).strip()
-
-    # Verwijder landcode (US), (NL), (JP) etc. aan het einde of voor SxxExx
-    cleaned = re.sub(r'\s*\([A-Z]{2}\)', '', cleaned).strip()
-
-    # Verwijder kwaliteitslabels
-    cleaned = re.sub(
-        r'\s*\b(4K|UHD|1080p|720p|HDR|SDR|BluRay|WEBRip|HDTV|x264|x265|HEVC|REMUX)\b.*',
-        '', cleaned, flags=re.IGNORECASE
-    ).strip()
-
-    # Als er een episode code was, zorg dat die correct achteraan staat
-    if ep_code:
-        # Haal eventuele bestaande SxxExx uit de naam
-        cleaned = re.sub(r'\s*[Ss]\d{1,2}[Ee]\d{1,3}.*', '', cleaned).strip()
-        cleaned = f"{cleaned} {ep_code}"
-
-    cleaned = safe_fn(cleaned)
-    return cleaned + ext if cleaned else filename
-
+def _clean_remote_subpath(remote_subpath: str) -> str:
+    """Reinig pad vóór upload naar SMB/FTP."""
+    parts = remote_subpath.replace("\\", "/").split("/")
+    if len(parts) < 2: return remote_subpath
+    cleaned = [parts[0]]
+    for i, part in enumerate(parts[1:], 1):
+        is_last = (i == len(parts) - 1)
+        if is_last and part.endswith(".strm"):
+            cleaned.append(_clean_strm_name(part))
+        else:
+            n = safe_fn(strip_prefix(part))
+            n = re.sub(r'\s*\(\d{4}\)', '', n).strip()
+            n = re.sub(r'\s*\([A-Z]{2}\)$', '', n).strip()
+            cleaned.append(safe_fn(n) or part)
+    return "/".join(cleaned)
 
 def storage_write_strm(remote_subpath: str, url: str, cfg: Dict,
                        auto_postprocess: bool = True) -> str:
-    """
-    Schrijf een .strm bestand naar de geconfigureerde storage backend.
-    Voert automatisch postprocessing uit na het schrijven.
-    """
     mode    = storage_mode(cfg)
-    is_film = cfg["output"]["movies"].lower() in remote_subpath.lower()
-
+    # is_film: check of het pad begint met de films subdir
+    films_sub  = storage_subdir(cfg, "movies")
+    series_sub = storage_subdir(cfg, "series")
+    rp = remote_subpath.replace("\\", "/").lstrip("/")
+    is_film = (rp.lower().startswith(films_sub.lower().lstrip("/") + "/") or
+               rp.lower() == films_sub.lower().lstrip("/"))
     if mode == "mount":
         dest = Path(cfg["output"]["base"]) / remote_subpath
         write_strm(dest, url)
         result = str(dest)
+        if auto_postprocess:
+            try:
+                if is_film: postprocess_movies(cfg)
+                else:       postprocess_series(cfg)
+            except Exception as e:
+                print(f"[!] Auto-postprocess fout: {e}")
     else:
-        # SMB / FTP: schrijf tijdelijk lokaal, upload dan
-        tmp = Path(DATA_DIR) / "tmp_strm" / remote_subpath.replace("/","_").replace("\\","_")
-        tmp.parent.mkdir(parents=True, exist_ok=True)
-        write_strm(tmp, url)
+        clean_subpath = _clean_remote_subpath(remote_subpath)
+        with tempfile.NamedTemporaryFile(suffix=".strm", delete=False, dir=DATA_DIR) as tf:
+            tmp_path = Path(tf.name)
         try:
-            ok = storage_write_file(str(tmp), remote_subpath, cfg)
-            if not ok:
-                raise RuntimeError(f"Upload mislukt naar {mode.upper()}: {remote_subpath}")
+            write_strm(tmp_path, url)
+            if not storage_write_file(str(tmp_path), clean_subpath, cfg):
+                raise RuntimeError(f"Upload mislukt naar {mode.upper()}: {clean_subpath}")
         finally:
-            try: tmp.unlink()
+            try: tmp_path.unlink()
             except Exception: pass
-        result = remote_subpath
-
-    # Automatisch postprocessen na aanmaken
-    if auto_postprocess:
-        try:
-            if is_film: postprocess_movies(cfg)
-            else:       postprocess_series(cfg)
-        except Exception as e:
-            print(f"[!] Auto-postprocess fout: {e}")
-
+        result = clean_subpath
     return result
 
-def storage_ensure_dirs(cfg: Dict):
-    """Zorg dat output mappen bestaan (alleen relevant voor mount mode)."""
-    if storage_mode(cfg) == "mount":
-        for key in ("live","movies","series"):
-            out_path(cfg, key).mkdir(parents=True, exist_ok=True)
-
-# ── SMB helpers ───────────────────────────────────────────────────
+# ── SMB ───────────────────────────────────────────────────────────
 def _smb_connect(cfg: Dict):
-    """Maak SMB verbinding. Geeft (SMBConnection, server_name) terug."""
     try:
         from smb.SMBConnection import SMBConnection
     except ImportError:
-        raise RuntimeError("pysmb niet geïnstalleerd. Voer uit: pip install pysmb")
+        raise RuntimeError("pysmb niet geïnstalleerd: pip install pysmb")
     s = _smb_cfg(cfg)
-    conn = SMBConnection(
-        s.get("user",""), s.get("password",""),
-        "mediamanager", s.get("host",""),
-        domain=s.get("domain",""),
-        use_ntlm_v2=True, is_direct_tcp=True,
-    )
-    connected = conn.connect(s["host"], 445)
-    if not connected:
+    conn = SMBConnection(s.get("user",""), s.get("password",""), "mediamanager",
+                         s.get("host",""), domain=s.get("domain",""),
+                         use_ntlm_v2=True, is_direct_tcp=True)
+    if not conn.connect(s["host"], 445):
         raise RuntimeError(f"SMB verbinding mislukt naar {s['host']}")
     return conn, s.get("share","")
 
 def _smb_put(local_path: str, remote_subpath: str, cfg: Dict) -> bool:
     try:
         conn, share = _smb_connect(cfg)
-        remote = remote_subpath.replace("\\","/")
-        # Maak mappen aan
-        parts = remote.split("/")
+        remote = remote_subpath.replace("\\", "/")
+        parts  = remote.split("/")
+        # Maak alle tussenliggende mappen aan
         for i in range(1, len(parts)):
-            d = "/".join(parts[:i])
-            try: conn.createDirectory(share, d)
-            except Exception: pass
+            try: conn.createDirectory(share, "/".join(parts[:i]))
+            except Exception: pass  # map bestaat al, dat is OK
+        # Verwijder bestand als het al bestaat (voorkomt ItemError/lock conflict)
+        try: conn.deleteFiles(share, remote)
+        except Exception: pass
         with open(local_path, "rb") as f:
             conn.storeFile(share, remote, f)
         conn.close()
         return True
     except Exception as e:
-        print(f"[!] SMB upload fout: {e}"); return False
+        print(f"[!] SMB upload fout ({remote_subpath}): {e}")
+        return False
 
 def _smb_list_strm(cfg: Dict) -> tuple[List[str], Dict[str,List[str]]]:
-    """Haal .strm bestanden op via SMB — wist cache eerst zodat verwijderde items verdwijnen."""
+    films: List[str] = []
+    series_dict: Dict[str,List[str]] = {}
+    seen_films: set[str] = set()
     try:
         conn, share = _smb_connect(cfg)
-        s        = _smb_cfg(cfg)
-        tmp_base = Path(DATA_DIR) / "smb_cache"
+        s = _smb_cfg(cfg)
 
-        # ── Wis de cache volledig voor een frisse sync ──
-        import shutil
-        if tmp_base.exists():
-            shutil.rmtree(tmp_base)
-        tmp_base.mkdir(parents=True, exist_ok=True)
+        def _walk(remote_dir: str, kind: str, serie_name: Optional[str] = None, depth: int = 0):
+            if depth > 4: return  # max recursie diepte
+            try: items = conn.listPath(share, remote_dir)
+            except Exception as e: print(f"[!] SMB walk ({remote_dir}): {e}"); return
+            for item in items:
+                if item.filename in (".",".."): continue
+                rpath = f"{remote_dir}/{item.filename}"
+                if item.isDirectory:
+                    n = safe_fn(strip_prefix(item.filename))
+                    n = re.sub(r'\s*\(\d{4}\)','',n).strip()
+                    n = re.sub(r'\s*\([A-Z]{2}\)$','',n).strip()
+                    _walk(rpath, kind, n or item.filename, depth+1)
+                elif item.filename.endswith(".strm"):
+                    cn = _clean_strm_name(item.filename)
+                    vp = f"__smb__:{kind}:{rpath}|{cn}"
+                    if kind == "films":
+                        stem = Path(cn).stem.lower()
+                        if stem not in seen_films:
+                            seen_films.add(stem); films.append(vp)
+                    else:
+                        sname = serie_name or _extract_serie_name(cn)
+                        series_dict.setdefault(sname,[]).append(vp)
 
-        for kind in ("films", "series"):
-            remote_base = s.get(f"{kind}_path", kind.capitalize())
-            local_base  = tmp_base / kind.capitalize()
-            local_base.mkdir(parents=True, exist_ok=True)
-            _smb_mirror(conn, share, remote_base, local_base)
-
+        _walk(s.get("films_path","Films"),  "films")
+        _walk(s.get("series_path","Series"), "series")
         conn.close()
-
     except Exception as e:
         print(f"[!] SMB list fout: {e}")
-        # Val terug op bestaande cache als verbinding mislukt
-        tmp_base = Path(DATA_DIR) / "smb_cache"
-
-    films: List[str] = []
-    series_dict: Dict[str, List[str]] = {}
-
-    # Films: dedupliceer op bestandsnaam (stem) zodat dubbelen niet getoond worden
-    seen_films: set[str] = set()
-    for root, _, files in os.walk(tmp_base / "Films"):
-        for f in files:
-            if f.endswith(".strm"):
-                stem = Path(f).stem.lower()
-                if stem not in seen_films:
-                    seen_films.add(stem)
-                    films.append(os.path.join(root, f))
-
-    # Series
-    for root, _, files in os.walk(tmp_base / "Series"):
-        for f in files:
-            if f.endswith(".strm"):
-                rel   = Path(root).relative_to(tmp_base / "Series").parts
-                sname = rel[0] if rel else _extract_serie_name(f)
-                series_dict.setdefault(sname, []).append(os.path.join(root, f))
-
     return films, series_dict
-
-def _smb_mirror(conn, share, remote_dir, local_dir):
-    """Spiegel remote SMB map naar lokale map (alleen .strm), met cleaning van namen."""
-    try:
-        items = conn.listPath(share, remote_dir)
-        for item in items:
-            if item.filename in (".",".."): continue
-            remote_path = f"{remote_dir}/{item.filename}"
-
-            if item.isDirectory:
-                # Clean de mapnaam direct bij het spiegelen
-                clean_dir = safe_fn(strip_prefix(item.filename))
-                local_path = local_dir / clean_dir
-                local_path.mkdir(parents=True, exist_ok=True)
-                _smb_mirror(conn, share, remote_path, local_path)
-            elif item.filename.endswith(".strm"):
-                # Clean de bestandsnaam
-                clean_name = _clean_strm_name(item.filename)
-                local_path = local_dir / clean_name
-                with open(local_path, "wb") as f:
-                    conn.retrieveFile(share, remote_path, f)
-    except Exception as e:
-        print(f"[!] SMB mirror fout ({remote_dir}): {e}")
 
 def smb_test(cfg: Dict) -> dict:
     try:
         conn, share = _smb_connect(cfg)
         shares = [s.name for s in conn.listShares()]
         conn.close()
-        return {"ok": True, "shares": shares}
+        return {"ok":True,"shares":shares}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok":False,"error":str(e)}
 
-# ── FTP helpers ───────────────────────────────────────────────────
+# ── FTP ───────────────────────────────────────────────────────────
 def _ftp_connect(cfg: Dict):
     import ftplib
     f = _ftp_cfg(cfg)
@@ -755,9 +756,8 @@ def _ftp_connect(cfg: Dict):
 
 def _ftp_mkdirs(ftp, remote_path: str):
     import ftplib
-    parts = [p for p in remote_path.replace("\\","/").split("/") if p]
     current = ""
-    for part in parts:
+    for part in [p for p in remote_path.replace("\\","/").split("/") if p]:
         current = f"{current}/{part}"
         try: ftp.mkd(current)
         except ftplib.error_perm: pass
@@ -770,88 +770,79 @@ def _ftp_put(local_path: str, remote_subpath: str, cfg: Dict) -> bool:
         if remote_dir: _ftp_mkdirs(ftp, remote_dir)
         with open(local_path, "rb") as f:
             ftp.storbinary(f"STOR {remote}", f)
-        ftp.quit()
-        return True
+        ftp.quit(); return True
     except Exception as e:
         print(f"[!] FTP upload fout: {e}"); return False
 
 def _ftp_list_strm(cfg: Dict) -> tuple[List[str], Dict[str,List[str]]]:
-    import shutil
-    tmp = Path(DATA_DIR) / "ftp_cache"
+    films: List[str] = []
+    series_dict: Dict[str,List[str]] = {}
+    seen_films: set[str] = set()
     try:
+        import ftplib
         ftp = _ftp_connect(cfg)
         fc  = _ftp_cfg(cfg)
-        # Wis cache voor frisse sync
-        if tmp.exists(): shutil.rmtree(tmp)
-        tmp.mkdir(parents=True, exist_ok=True)
-        _ftp_mirror(ftp, fc.get("films_path","/media/Films"),  tmp / "Films")
-        _ftp_mirror(ftp, fc.get("series_path","/media/Series"), tmp / "Series")
+
+        def _walk(remote_dir: str, kind: str, serie_name: Optional[str] = None, depth: int = 0):
+            if depth > 4: return
+            try:
+                items: List[str] = []
+                ftp.retrlines(f"LIST {remote_dir}", items.append)
+            except Exception as e:
+                print(f"[!] FTP walk ({remote_dir}): {e}"); return
+            for line in items:
+                parts = line.split(None, 8)
+                if len(parts) < 9: continue
+                name = parts[8]; is_dir = line.startswith("d")
+                rfp  = f"{remote_dir}/{name}"
+                if is_dir:
+                    n = safe_fn(strip_prefix(name))
+                    n = re.sub(r'\s*\(\d{4}\)','',n).strip()
+                    n = re.sub(r'\s*\([A-Z]{2}\)$','',n).strip()
+                    _walk(rfp, kind, n or name, depth+1)
+                elif name.endswith(".strm"):
+                    cn = _clean_strm_name(name)
+                    vp = f"__ftp__:{kind}:{rfp}|{cn}"
+                    if kind == "films":
+                        stem = Path(cn).stem.lower()
+                        if stem not in seen_films:
+                            seen_films.add(stem); films.append(vp)
+                    else:
+                        sname = serie_name or _extract_serie_name(cn)
+                        series_dict.setdefault(sname,[]).append(vp)
+
+        _walk(fc.get("films_path","/media/Films"),  "films")
+        _walk(fc.get("series_path","/media/Series"), "series")
         ftp.quit()
     except Exception as e:
         print(f"[!] FTP list fout: {e}")
-        tmp.mkdir(parents=True, exist_ok=True)
-
-    films: List[str] = []
-    series_dict: Dict[str, List[str]] = {}
-
-    seen_films: set[str] = set()
-    for root,_,files in os.walk(tmp/"Films"):
-        for f in files:
-            if f.endswith(".strm"):
-                stem = Path(f).stem.lower()
-                if stem not in seen_films:
-                    seen_films.add(stem)
-                    films.append(os.path.join(root,f))
-
-    for root,_,files in os.walk(tmp/"Series"):
-        for f in files:
-            if f.endswith(".strm"):
-                rel   = Path(root).relative_to(tmp/"Series").parts
-                sname = rel[0] if rel else _extract_serie_name(f)
-                series_dict.setdefault(sname,[]).append(os.path.join(root,f))
     return films, series_dict
-
-def _ftp_mirror(ftp, remote_dir: str, local_dir: Path):
-    """Spiegel remote FTP map naar lokale map (alleen .strm)."""
-    import ftplib
-    local_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        items = []
-        ftp.retrlines(f"LIST {remote_dir}", items.append)
-        for line in items:
-            parts = line.split(None, 8)
-            if len(parts) < 9: continue
-            name      = parts[8]
-            is_dir    = line.startswith("d")
-            remote_fp = f"{remote_dir}/{name}"
-            local_fp  = local_dir / name
-            if is_dir:
-                _ftp_mirror(ftp, remote_fp, local_fp)
-            elif name.endswith(".strm"):
-                with open(local_fp, "wb") as f:
-                    ftp.retrbinary(f"RETR {remote_fp}", f.write)
-    except Exception as e:
-        print(f"[!] FTP mirror fout ({remote_dir}): {e}")
 
 def ftp_test(cfg: Dict) -> dict:
     try:
         ftp = _ftp_connect(cfg)
-        welcome = ftp.getwelcome()
-        ftp.quit()
-        return {"ok": True, "welcome": welcome}
+        welcome = ftp.getwelcome(); ftp.quit()
+        return {"ok":True,"welcome":welcome}
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok":False,"error":str(e)}
 
 # ── Download Queue ────────────────────────────────────────────────
 class DownloadQueue:
     MAX_RETRIES = 3
 
     def __init__(self):
-        self._lock=threading.Lock(); self.queue=[]; self.history=[]; self.current=None
-        self._wt: Optional[threading.Thread]=None
+        self._lock = threading.Lock()
+        self.queue:   List[dict] = []
+        self.history: List[dict] = []
+        self.current: Optional[dict] = None
+        self._wt:     Optional[threading.Thread] = None
 
-    def _entry(self, fp):
-        return {"id":str(uuid.uuid4()),"file_path":fp,"name":Path(fp).stem,"status":"queued",
+    def _entry(self, fp: str) -> dict:
+        if fp.startswith(("__smb__:", "__ftp__:")):
+            display = Path(fp.split("|")[1]).stem if "|" in fp else fp.split(":")[-1]
+        else:
+            display = Path(fp).stem
+        return {"id":str(uuid.uuid4()),"file_path":fp,"name":display,"status":"queued",
                 "progress":0,"speed":"","eta":"","attempt":0,
                 "added_at":datetime.datetime.now().isoformat(timespec="seconds"),
                 "finished_at":None,"error":None}
@@ -867,13 +858,13 @@ class DownloadQueue:
                     "queue":[dict(e) for e in self.queue],
                     "history":[dict(e) for e in self.history]}
 
-    def delete_history(self,iid):
+    def delete_history(self, iid):
         with self._lock: self.history=[e for e in self.history if e["id"]!=iid]
 
     def clear_history(self):
         with self._lock: self.history.clear()
 
-    def retry(self,iid):
+    def retry(self, iid):
         with self._lock:
             it=next((e for e in self.history if e["id"]==iid),None)
             if it and it["status"]=="failed":
@@ -884,115 +875,177 @@ class DownloadQueue:
 
     def _ew(self):
         if self._wt is None or not self._wt.is_alive():
-            self._wt=threading.Thread(target=self._worker,daemon=True)
+            self._wt = threading.Thread(target=self._worker, daemon=True)
             self._wt.start()
 
     def _worker(self):
         while True:
             with self._lock:
                 if not self.queue: self.current=None; return
-                e=self.queue.pop(0); self.current=e
-            ok=self._process(e)
+                e = self.queue.pop(0); self.current = e
+            ok = self._process(e)
             with self._lock:
-                e["finished_at"]=datetime.datetime.now().isoformat(timespec="seconds")
-                e["status"]="done" if ok else "failed"
-                if ok: e["progress"]=100
-                self.history.insert(0,e); self.current=None
+                e["finished_at"] = datetime.datetime.now().isoformat(timespec="seconds")
+                e["status"] = "done" if ok else "failed"
+                if ok: e["progress"] = 100
+                self.history.insert(0, e); self.current = None
 
     def _process(self, e):
-        cfg=load_conf()
-        fp=Path(e["file_path"])
-        is_film = "Movies" in str(fp) or "Films" in str(fp)
-        mode = storage_mode(cfg)
+        cfg      = load_conf()
+        raw_path = e["file_path"]
+        mode     = storage_mode(cfg)
+        is_virtual = raw_path.startswith(("__smb__:", "__ftp__:"))
 
-        # Tijdelijke lokale werkmap
-        tmp_dir = Path(DATA_DIR) / "tmp_work"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        out_file = str(tmp_dir / (fp.stem + ".mkv"))
+        if is_virtual:
+            parts       = raw_path.split(":", 2)
+            proto       = parts[0]
+            kind        = parts[1] if len(parts) > 2 else "films"
+            rest        = parts[2] if len(parts) > 2 else parts[-1]
+            remote_path = rest.split("|")[0]
+            display     = rest.split("|")[1] if "|" in rest else Path(remote_path).name
+            clean_name  = Path(display).stem
+            is_film     = (kind == "films")
+            url = self._read_virtual_strm(remote_path, proto, cfg)
+            if not url:
+                e["error"] = f"Kan stream URL niet ophalen: {remote_path}"; return False
+        else:
+            fp         = Path(raw_path)
+            is_film    = "Movies" in raw_path or "Films" in raw_path
+            clean_name = fp.stem
+            url        = None
 
-        # Bij mount mode: schrijf direct naar output map
+        # Output locatie
+        # Voor series: bepaal seriename uit clean_name (bijv. "The Simpsons" uit "The Simpsons S01E01")
+        if is_film:
+            folder_name = clean_name   # filmmap = "The Dark Knight"
+            file_name   = clean_name   # bestand = "The Dark Knight.mkv"
+        else:
+            folder_name = _extract_serie_name(clean_name)  # "The Simpsons"
+            file_name   = clean_name                        # "The Simpsons S01E01.mkv"
+
         if mode == "mount":
             od = out_path(cfg,"movies") if is_film else out_path(cfg,"series")
-            od.mkdir(parents=True,exist_ok=True)
-            out_file = str(od / (fp.stem + ".mkv"))
+            # Altijd in submap opslaan: Movies/Titel/Titel.mkv of Series/Naam/Naam S01E01.mkv
+            item_dir  = od / folder_name
+            item_dir.mkdir(parents=True, exist_ok=True)
+            out_file  = str(item_dir / (file_name + ".mkv"))
+            tmp_dir   = None
+        else:
+            tmp_dir  = Path(tempfile.mkdtemp(prefix="mm_", dir=DATA_DIR))
+            out_file = str(tmp_dir / (file_name + ".mkv"))
+
+        def _cleanup():
+            if tmp_dir and tmp_dir.exists():
+                try: shutil.rmtree(tmp_dir, ignore_errors=True)
+                except Exception: pass
 
         try:
-            try: url=fp.read_text().strip().splitlines()[0].strip()
-            except Exception as ex: e["error"]=f"Kan .strm niet lezen: {ex}"; return False
-            if not url.startswith("http"): e["error"]="Ongeldige URL"; return False
+            if url is None:
+                try: url = Path(raw_path).read_text().strip().splitlines()[0].strip()
+                except Exception as ex: e["error"]=f"Kan .strm niet lezen: {ex}"; return False
 
-            ok=False
-            for attempt in range(1,self.MAX_RETRIES+1):
-                e.update({"attempt":attempt,"status":"downloading","progress":0,"speed":"","eta":"","error":None})
-                ok=self._ytdlp(url,out_file,e)
+            if not url or not url.startswith("http"):
+                e["error"] = "Ongeldige of lege stream URL"; return False
+
+            ok = False
+            for attempt in range(1, self.MAX_RETRIES + 1):
+                e.update({"attempt":attempt,"status":"downloading","progress":0,
+                          "speed":"","eta":"","error":None})
+                ok = self._ytdlp(url, out_file, e)
                 if ok: break
-                e["error"]=f"Poging {attempt} mislukt"
-                if attempt<self.MAX_RETRIES: time.sleep(3)
+                e["error"] = f"Poging {attempt} mislukt"
+                if attempt < self.MAX_RETRIES: time.sleep(3)
             if not ok: return False
 
-            # Upload naar SMB/FTP indien niet mount mode
             if mode in ("smb","ftp"):
                 e["status"] = f"uploaden via {mode.upper()}..."
-                subdir = cfg["output"]["movies"] if is_film else cfg["output"]["series"]
-                remote_subpath = f"{subdir}/{fp.stem}/{fp.stem}.mkv"
-                upload_ok = storage_write_file(out_file, remote_subpath, cfg)
-                if not upload_ok:
+                subdir = storage_subdir(cfg, "movies" if is_film else "series")
+                # Serie: Series/The Simpsons/The Simpsons S01E01.mkv
+                # Film:  Films/The Dark Knight/The Dark Knight.mkv
+                remote_mkv = f"{subdir}/{folder_name}/{file_name}.mkv"
+                if not storage_write_file(out_file, remote_mkv, cfg):
                     e["error"] = f"{mode.upper()} upload mislukt"; return False
 
             # Ondertitels
-            oc=cfg.get("opensubtitles",{})
+            oc = cfg.get("opensubtitles",{})
             if oc.get("enabled") and oc.get("api_key"):
-                e["status"]="ondertitels ophalen..."
-                tk=cfg["tmdb"]["api_key"] if cfg["tmdb"].get("enabled") else ""
+                e["status"] = "ondertitels ophalen..."
+                tk = cfg["tmdb"]["api_key"] if cfg["tmdb"].get("enabled") else ""
                 if is_film:
-                    info=tmdb_movie(fp.name,tk); title=info.get("title") or fp.stem
-                    season=episode=None
+                    info  = tmdb_movie(clean_name, tk)
+                    title = info.get("title") or clean_name
+                    season = episode = None
                 else:
-                    sn=fp.parent.name; info=tmdb_series(sn,tk); title=info.get("title") or sn
-                    m=re.search(r'[Ss](\d+)[Ee](\d+)',fp.stem)
-                    season=int(m.group(1)) if m else None; episode=int(m.group(2)) if m else None
+                    m       = re.search(r'[Ss](\d+)[Ee](\d+)', clean_name)
+                    info    = tmdb_series(folder_name, tk)
+                    title   = info.get("title") or folder_name
+                    season  = int(m.group(1)) if m else None
+                    episode = int(m.group(2)) if m else None
                 for lang in (oc.get("langs") or ["nl","en"]):
                     time.sleep(1)
-                    dest=out_file.replace(".mkv",f".{lang}.srt")
-                    if os_download(title,lang,dest,cfg,season,episode) and mode in ("smb","ftp"):
-                        subdir = cfg["output"]["movies"] if is_film else cfg["output"]["series"]
-                        storage_write_file(dest, f"{subdir}/{fp.stem}/{fp.stem}.{lang}.srt", cfg)
+                    dest = out_file.replace(".mkv", f".{lang}.srt")
+                    if os_download(title, lang, dest, cfg, season, episode) and mode in ("smb","ftp"):
+                        subdir = storage_subdir(cfg, "movies" if is_film else "series")
+                        storage_write_file(dest, f"{subdir}/{folder_name}/{file_name}.{lang}.srt", cfg)
 
-            jf_refresh(cfg,is_film)
+            jf_refresh(cfg, is_film)
 
-            # Postprocessing (alleen bij mount mode)
             if mode == "mount":
-                e["status"]="postprocessing..."
+                e["status"] = "postprocessing..."
                 if is_film: postprocess_movies(cfg)
-                else: postprocess_series(cfg)
-
-            # Ruim tijdelijke bestanden op bij SMB/FTP mode
-            if mode in ("smb","ftp"):
-                for f_tmp in tmp_dir.glob(fp.stem + ".*"):
-                    try: f_tmp.unlink()
-                    except Exception: pass
+                else:       postprocess_series(cfg)
 
             return True
         except Exception as ex:
-            e["error"]=str(ex); return False
+            e["error"] = str(ex); return False
+        finally:
+            _cleanup()
+
+    def _read_virtual_strm(self, remote_path: str, proto: str, cfg: Dict) -> Optional[str]:
+        try:
+            if proto == "__smb__":
+                conn, share = _smb_connect(cfg)
+                buf = io.BytesIO()
+                conn.retrieveFile(share, remote_path, buf)
+                conn.close()
+                return buf.getvalue().decode("utf-8").strip().splitlines()[0].strip()
+            elif proto == "__ftp__":
+                ftp = _ftp_connect(cfg)
+                buf = io.BytesIO()
+                ftp.retrbinary(f"RETR {remote_path}", buf.write)
+                ftp.quit()
+                return buf.getvalue().decode("utf-8").strip().splitlines()[0].strip()
+        except Exception as ex:
+            print(f"[!] Kan .strm niet lezen via {proto}: {ex}")
+        return None
 
     def _ytdlp(self, url, output, e):
-        cmd=["yt-dlp","--no-playlist","--no-warnings","--newline","--progress",
-             "--progress-template","%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
-             "-o",output,url]
+        cmd = [
+            "yt-dlp",
+            "--no-playlist",
+            "--no-warnings",
+            "--newline",
+            "--progress",
+            "--progress-template", "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
+            "--buffer-size", "16K",
+            "--no-part",
+            "-o", output,
+            url,
+        ]
         try:
-            proc=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,bufsize=1)
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, bufsize=8192)
             for line in proc.stdout:
-                line=line.strip()
+                line = line.strip()
                 if "|" in line:
-                    parts=line.split("|")
-                    if len(parts)>=3:
-                        try: e["progress"]=float(parts[0].strip().replace("%",""))
+                    parts = line.split("|")
+                    if len(parts) >= 3:
+                        try: e["progress"] = float(parts[0].strip().replace("%",""))
                         except ValueError: pass
-                        e["speed"]=parts[1].strip(); e["eta"]=parts[2].strip()
-            proc.wait(); return proc.returncode==0
+                        e["speed"] = parts[1].strip(); e["eta"] = parts[2].strip()
+            proc.wait(); return proc.returncode == 0
         except Exception as ex:
-            e["error"]=str(ex); return False
+            e["error"] = str(ex); return False
 
 download_queue = DownloadQueue()
 
@@ -1002,54 +1055,39 @@ download_queue = DownloadQueue()
 
 @app.get("/")
 def index():
-    cfg=load_conf()
-    x=cfg.get("xtream",{})
+    cfg = load_conf()
+    x   = cfg.get("xtream",{})
     if not x.get("user") or not x.get("server"):
         return redirect(url_for("settings"))
     return redirect(url_for("browse"))
 
 @app.route("/settings", methods=["GET","POST"])
 def settings():
-    cfg=load_conf()
-    if request.method=="POST":
-        sec=request.form.get("section","")
-        if sec=="xtream":
-            rp=request.form.get("port","").strip()
-            cfg["xtream"].update({"server":request.form.get("server","").strip(),
-                "port":int(rp) if rp and rp.isdigit() else 0,
-                "user":request.form.get("user","").strip(),
-                "pwd":request.form.get("pwd","").strip(),
-                "verify_tls":request.form.get("verify_tls")=="on",
-                "timeout":int(request.form.get("timeout") or 15)})
-        elif sec=="output":
-            cfg["output"].update({"base":request.form.get("base","").strip() or "/media/library",
-                "live":request.form.get("live","").strip() or "Live",
-                "movies":request.form.get("movies","").strip() or "Movies",
-                "series":request.form.get("series","").strip() or "Series"})
-            cfg["ext"].update({"live":(request.form.get("ext_live") or "ts").strip(),
-                "movie":(request.form.get("ext_movie") or "").strip() or None,
-                "episode":(request.form.get("ext_episode") or "").strip() or None})
-            cfg["cache"]["ttl_hours"]=max(0,int(request.form.get("ttl_hours") or 6))
-        elif sec=="storage":
+    cfg = load_conf()
+    if request.method == "POST":
+        sec = request.form.get("section","")
+        if sec == "xtream":
+            rp = request.form.get("port","").strip()
+            cfg["xtream"].update({
+                "server":     request.form.get("server","").strip(),
+                "port":       int(rp) if rp and rp.isdigit() else 0,
+                "user":       request.form.get("user","").strip(),
+                "pwd":        request.form.get("pwd","").strip(),
+                "verify_tls": request.form.get("verify_tls") == "on",
+                "timeout":    int(request.form.get("timeout") or 15),
+            })
+        elif sec == "storage":
             mode = request.form.get("storage_mode","mount")
             cfg["storage"]["mode"] = mode
-            # Mount paden opslaan
-            if request.form.get("base","").strip():
-                cfg["output"]["base"]   = request.form.get("base","").strip()
-            if request.form.get("live","").strip():
-                cfg["output"]["live"]   = request.form.get("live","").strip()
-            if request.form.get("movies","").strip():
-                cfg["output"]["movies"] = request.form.get("movies","").strip()
-            if request.form.get("series","").strip():
-                cfg["output"]["series"] = request.form.get("series","").strip()
-            # Extensies & cache
+            for field in ("base","live","movies","series"):
+                val = request.form.get(field,"").strip()
+                if val: cfg["output"][field] = val
             cfg["ext"].update({
                 "live":    (request.form.get("ext_live") or "ts").strip(),
                 "movie":   (request.form.get("ext_movie") or "").strip() or None,
                 "episode": (request.form.get("ext_episode") or "").strip() or None,
             })
             cfg["cache"]["ttl_hours"] = max(0, int(request.form.get("ttl_hours") or 6))
-            # SMB
             cfg["storage"]["smb"].update({
                 "host":        request.form.get("smb_host","").strip(),
                 "share":       request.form.get("smb_share","").strip(),
@@ -1059,7 +1097,6 @@ def settings():
                 "films_path":  request.form.get("smb_films_path","Films").strip(),
                 "series_path": request.form.get("smb_series_path","Series").strip(),
             })
-            # FTP
             rp = request.form.get("ftp_port","21").strip()
             cfg["storage"]["ftp"].update({
                 "host":         request.form.get("ftp_host","").strip(),
@@ -1069,38 +1106,42 @@ def settings():
                 "films_path":   request.form.get("ftp_films_path","/media/Films").strip(),
                 "series_path":  request.form.get("ftp_series_path","/media/Series").strip(),
             })
-        elif sec=="jellyfin":
-            cfg["jellyfin"].update({"enabled":request.form.get("jf_enabled")=="on",
-                "url":request.form.get("jf_url","").strip(),
-                "api_key":request.form.get("jf_api_key","").strip(),
-                "films_library_id":request.form.get("jf_films_lib","").strip(),
-                "series_library_id":request.form.get("jf_series_lib","").strip()})
-        elif sec=="tmdb":
-            cfg["tmdb"].update({"enabled":request.form.get("tmdb_enabled")=="on",
-                "api_key":request.form.get("tmdb_api_key","").strip()})
+        elif sec == "jellyfin":
+            cfg["jellyfin"].update({
+                "enabled":           request.form.get("jf_enabled") == "on",
+                "url":               request.form.get("jf_url","").strip(),
+                "api_key":           request.form.get("jf_api_key","").strip(),
+                "films_library_id":  request.form.get("jf_films_lib","").strip(),
+                "series_library_id": request.form.get("jf_series_lib","").strip(),
+            })
+        elif sec == "tmdb":
+            cfg["tmdb"].update({"enabled": request.form.get("tmdb_enabled") == "on",
+                                "api_key": request.form.get("tmdb_api_key","").strip()})
             _ltc()
-        elif sec=="opensubtitles":
-            langs=[l.strip() for l in re.split(r'[,;]',request.form.get("os_langs","nl,en")) if l.strip()]
-            cfg["opensubtitles"].update({"enabled":request.form.get("os_enabled")=="on",
-                "api_key":request.form.get("os_api_key","").strip(),
-                "username":request.form.get("os_username","").strip(),
-                "password":request.form.get("os_password","").strip(),
-                "langs":langs})
-            global _os_token; _os_token=None
+        elif sec == "opensubtitles":
+            langs = [l.strip() for l in re.split(r'[,;]', request.form.get("os_langs","nl,en")) if l.strip()]
+            cfg["opensubtitles"].update({
+                "enabled":  request.form.get("os_enabled") == "on",
+                "api_key":  request.form.get("os_api_key","").strip(),
+                "username": request.form.get("os_username","").strip(),
+                "password": request.form.get("os_password","").strip(),
+                "langs":    langs,
+            })
+            global _os_token; _os_token = None
         save_conf(cfg)
         flash("Instellingen opgeslagen.","success")
         return redirect(url_for("settings"))
 
-    account_info=None
-    x=cfg.get("xtream",{})
+    account_info = None
+    x = cfg.get("xtream",{})
     if x.get("server") and x.get("user") and x.get("pwd"):
-        try: account_info=make_api(cfg).get_user_info()
+        try: account_info = make_api(cfg).get_user_info()
         except Exception: pass
-    return render_template("settings.html",cfg=cfg,account_info=account_info)
+    return render_template("settings.html", cfg=cfg, account_info=account_info)
 
 @app.get("/browse")
 def browse():
-    return render_template("browse.html",cfg=load_conf())
+    return render_template("browse.html", cfg=load_conf())
 
 @app.route("/library", methods=["GET","POST"])
 def library():
@@ -1113,14 +1154,11 @@ def library():
         else:
             flash("⚠️ Geen bestanden geselecteerd.", "warning")
         return redirect(url_for("library"))
-
     films_raw, series_raw = storage_list_strm(cfg)
     tk = cfg["tmdb"]["api_key"] if cfg["tmdb"].get("enabled") else ""
-
-    films  = [{"path": f, "info": tmdb_movie(f, tk) if tk else {}} for f in films_raw]
-    series = {sn: {"info": tmdb_series(sn, tk) if tk else {}, "seasons": group_seasons(eps)}
-              for sn, eps in series_raw.items()}
-
+    films  = [{"path":f, "info":tmdb_movie(f,tk) if tk else {}} for f in films_raw]
+    series = {sn: {"info":tmdb_series(sn,tk) if tk else {}, "seasons":group_seasons(eps)}
+              for sn,eps in series_raw.items()}
     return render_template("library.html", films=films, series=series)
 
 @app.get("/queue")
@@ -1129,16 +1167,16 @@ def queue_page():
 
 # ── API: Xtream ───────────────────────────────────────────────────
 def _sf(q):
-    s=(q or "").strip().lower()
-    return s in ("*","all") or len(s)>=2
+    s = (q or "").strip().lower()
+    return s in ("*","all") or len(s) >= 2
 
 @app.get("/api/live")
 def api_live():
     cfg=load_conf(); q=(request.args.get("q") or "").strip()
     try:
         if not _sf(q): return jsonify({"ok":True,"items":[],"cached_at":None,"hint":"Geef ≥2 tekens of '*'."})
-        doc=_gor("live.json",int(cfg["cache"]["ttl_hours"]),lambda:{"items":make_api(cfg).get_live_streams()})
-        items=doc.get("items",[]); qn=q.lower()
+        doc   = _gor("live.json",int(cfg["cache"]["ttl_hours"]),lambda:{"items":make_api(cfg).get_live_streams()})
+        items = doc.get("items",[]); qn=q.lower()
         if qn not in ("*","all"): items=[x for x in items if qn in (x.get("name") or "").lower()]
         return jsonify({"ok":True,"items":items,"cached_at":doc.get("fetched_at")})
     except Exception as e: return jsonify({"ok":False,"error":str(e)}),500
@@ -1148,8 +1186,8 @@ def api_movies():
     cfg=load_conf(); q=(request.args.get("q") or "").strip()
     try:
         if not _sf(q): return jsonify({"ok":True,"items":[],"cached_at":None,"hint":"Geef ≥2 tekens of '*'."})
-        doc=_gor("movies.json",int(cfg["cache"]["ttl_hours"]),lambda:{"items":make_api(cfg).get_vod_streams()})
-        items=doc.get("items",[]); qn=q.lower()
+        doc   = _gor("movies.json",int(cfg["cache"]["ttl_hours"]),lambda:{"items":make_api(cfg).get_vod_streams()})
+        items = doc.get("items",[]); qn=q.lower()
         if qn not in ("*","all"): items=[x for x in items if qn in (x.get("name") or "").lower()]
         return jsonify({"ok":True,"items":items,"cached_at":doc.get("fetched_at")})
     except Exception as e: return jsonify({"ok":False,"error":str(e)}),500
@@ -1159,8 +1197,8 @@ def api_series():
     cfg=load_conf(); q=(request.args.get("q") or "").strip()
     try:
         if not _sf(q): return jsonify({"ok":True,"items":[],"cached_at":None,"hint":"Geef ≥2 tekens of '*'."})
-        doc=_gor("series.json",int(cfg["cache"]["ttl_hours"]),lambda:{"items":make_api(cfg).get_series()})
-        items=doc.get("items",[]); qn=q.lower()
+        doc   = _gor("series.json",int(cfg["cache"]["ttl_hours"]),lambda:{"items":make_api(cfg).get_series()})
+        items = doc.get("items",[]); qn=q.lower()
         if qn not in ("*","all"): items=[x for x in items if qn in (x.get("name") or "").lower()]
         return jsonify({"ok":True,"items":items,"cached_at":doc.get("fetched_at")})
     except Exception as e: return jsonify({"ok":False,"error":str(e)}),500
@@ -1169,8 +1207,8 @@ def api_series():
 def api_series_detail(series_id):
     cfg=load_conf()
     try:
-        doc=_gor(f"series_{series_id}.json",int(cfg["cache"]["ttl_hours"]),
-                 lambda:{"data":make_api(cfg).get_series_info(series_id)})
+        doc = _gor(f"series_{series_id}.json",int(cfg["cache"]["ttl_hours"]),
+                   lambda:{"data":make_api(cfg).get_series_info(series_id)})
         return jsonify({"ok":True,"data":doc.get("data"),"cached_at":doc.get("fetched_at")})
     except Exception as e: return jsonify({"ok":False,"error":str(e)}),500
 
@@ -1178,7 +1216,7 @@ def api_series_detail(series_id):
 def api_refresh():
     cfg=load_conf(); scope=request.args.get("scope","all")
     try:
-        api=make_api(cfg)
+        api = make_api(cfg)
         with _LOCK:
             if scope in ("all","live"):   _wc("live.json",{"items":api.get_live_streams()})
             if scope in ("all","movies"): _wc("movies.json",{"items":api.get_vod_streams()})
@@ -1188,174 +1226,124 @@ def api_refresh():
 
 @app.post("/api/strm/live")
 def api_strm_live():
-    cfg   = load_conf()
-    p     = request.get_json(force=True) or {}
-    sid   = p.get("stream_id")
-    title = p.get("title") or f"Live {sid}"
-    ext   = pick_ext(p.get("ext"), cfg["ext"]["live"] or "ts")
-    url   = make_api(cfg).live_url(sid, ext)
-    fname = sanitize(title) + ".strm"
-    remote = f"{cfg['output']['live']}/{fname}"
+    cfg=load_conf(); p=request.get_json(force=True) or {}
+    sid=p.get("stream_id"); title=p.get("title") or f"Live {sid}"
+    ext=pick_ext(p.get("ext"), cfg["ext"]["live"] or "ts")
+    url=make_api(cfg).live_url(sid, ext)
+    # Live heeft geen aparte SMB/FTP path — gebruik output live submap
+    live_sub = cfg["output"]["live"]
     try:
-        path = storage_write_strm(remote, url, cfg)
-        return jsonify({"ok": True, "path": path, "url": url})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        path = storage_write_strm(f"{live_sub}/{sanitize(title)}.strm", url, cfg)
+        return jsonify({"ok":True,"path":path,"url":url})
+    except Exception as e: return jsonify({"ok":False,"error":str(e)}),500
 
 @app.post("/api/strm/movie")
 def api_strm_movie():
-    cfg = load_conf()
-    p   = request.get_json(force=True) or {}
-    sid = p.get("stream_id")
-    if not sid:
-        return jsonify({"ok": False, "error": "Geen stream_id"}), 400
-
-    # Lookup in cache voor tmdb_id en naam
-    tmdb_id = title_raw = None
-    cf = _cf("movies.json")
+    cfg=load_conf(); p=request.get_json(force=True) or {}
+    sid=p.get("stream_id")
+    if not sid: return jsonify({"ok":False,"error":"Geen stream_id"}),400
+    tmdb_id=title_raw=None
+    cf=_cf("movies.json")
     if cf.exists():
         try:
             for it in (json.loads(cf.read_text()).get("items") or []):
-                if str(it.get("stream_id")) == str(sid):
-                    tmdb_id   = (it.get("tmdb") or "").strip()
-                    title_raw = it.get("name")
-                    break
-        except Exception:
-            pass
-    if not title_raw:
-        title_raw = p.get("title") or f"Movie {sid}"
-
-    ext  = pick_ext(p.get("ext"), cfg["ext"]["movie"] or "mp4")
-    url  = make_api(cfg).vod_url(sid, ext)
-    sb   = sanitize(f"{tmdb_id} - {sanitize(title_raw)}") if tmdb_id else sanitize(title_raw)
-    remote = f"{cfg['output']['movies']}/{sb}/{sb}.strm"
+                if str(it.get("stream_id"))==str(sid):
+                    tmdb_id=(it.get("tmdb") or "").strip(); title_raw=it.get("name"); break
+        except Exception: pass
+    if not title_raw: title_raw=p.get("title") or f"Movie {sid}"
+    ext=pick_ext(p.get("ext"), cfg["ext"]["movie"] or "mp4")
+    url=make_api(cfg).vod_url(sid, ext)
+    sb=sanitize(f"{tmdb_id} - {sanitize(title_raw)}") if tmdb_id else sanitize(title_raw)
+    sub=storage_subdir(cfg,"movies")
     try:
-        path = storage_write_strm(remote, url, cfg)
-        return jsonify({"ok": True, "path": path, "tmdb": tmdb_id or None, "url": url})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        path=storage_write_strm(f"{sub}/{sb}/{sb}.strm", url, cfg)
+        return jsonify({"ok":True,"path":path,"tmdb":tmdb_id or None,"url":url})
+    except Exception as e: return jsonify({"ok":False,"error":str(e)}),500
 
 @app.post("/api/strm/series")
 def api_strm_series():
-    cfg       = load_conf()
-    p         = request.get_json(force=True) or {}
-    sid       = p.get("series_id")
-    forced_ext= p.get("ext") or cfg["ext"]["episode"]
+    cfg=load_conf(); p=request.get_json(force=True) or {}
+    sid=p.get("series_id"); forced_ext=p.get("ext") or cfg["ext"]["episode"]
+    sub=storage_subdir(cfg,"series")
     try:
-        api   = make_api(cfg)
-        data  = api.get_series_info(sid)
-        sname = sanitize(
-            (data.get("info") or {}).get("name") or
-            (data.get("info") or {}).get("title") or f"Series {sid}"
-        )
-        eps = data.get("episodes") or {}
-        if not eps:
-            return jsonify({"ok": False, "error": "Geen afleveringen"}), 404
-
-        created = 0
-        errors  = []
-        for sk, eplist in sorted(eps.items(),
-                                  key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
-            try: sn = int(sk)
-            except ValueError: sn = 0
+        api  = make_api(cfg); data=api.get_series_info(sid)
+        sname=sanitize((data.get("info") or {}).get("name") or
+                       (data.get("info") or {}).get("title") or f"Series {sid}")
+        eps  = data.get("episodes") or {}
+        if not eps: return jsonify({"ok":False,"error":"Geen afleveringen"}),404
+        created=0; errors=[]
+        for sk,eplist in sorted(eps.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
+            try: sn=int(sk)
+            except ValueError: sn=0
             for ep in (eplist or []):
-                en  = ep.get("episode_num") or ep.get("episode") or 0
-                try: en = int(en)
-                except Exception: en = 0
-                eid    = ep.get("id") or ep.get("episode_id") or ep.get("stream_id")
-                ext    = pick_ext(ep.get("container_extension") or forced_ext, "mp4")
-                url    = api.episode_url(eid, ext)
-                fname  = f"{sname} S{sn:02d}E{en:02d}.strm"
-                remote = f"{cfg['output']['series']}/{sname}/{fname}"
+                en=ep.get("episode_num") or ep.get("episode") or 0
+                try: en=int(en)
+                except Exception: en=0
+                eid=ep.get("id") or ep.get("episode_id") or ep.get("stream_id")
+                ext=pick_ext(ep.get("container_extension") or forced_ext,"mp4")
                 try:
-                    storage_write_strm(remote, url, cfg)
+                    storage_write_strm(
+                        f"{sub}/{sname}/{sname} S{sn:02d}E{en:02d}.strm",
+                        api.episode_url(eid, ext), cfg, auto_postprocess=False)
                     created += 1
-                except Exception as e:
-                    errors.append(str(e))
-
-        return jsonify({"ok": True, "count": created, "errors": errors,
-                        "path": f"{cfg['output']['series']}/{sname}"})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+                except Exception as ex: errors.append(str(ex))
+        if storage_mode(cfg) == "mount":
+            postprocess_series(cfg)
+        return jsonify({"ok":True,"count":created,"errors":errors,"path":f"{sub}/{sname}"})
+    except Exception as e: return jsonify({"ok":False,"error":str(e)}),500
 
 @app.post("/api/strm/batch")
 def api_strm_batch():
-    """Maak .strm bestanden voor een lijst van stream IDs (films of series)."""
-    cfg     = load_conf()
-    payload = request.get_json(force=True) or {}
-    kind    = payload.get("kind", "movie")   # "movie" | "series"
-    ids     = payload.get("ids", [])
-    if not ids:
-        return jsonify({"ok": False, "error": "Geen IDs opgegeven"}), 400
-
-    created = 0
-    errors  = []
-    api     = make_api(cfg)
-
-    # Laad cache voor tmdb lookups
-    cf = _cf("movies.json")
-    movie_cache = {}
+    cfg=load_conf(); payload=request.get_json(force=True) or {}
+    kind=payload.get("kind","movie"); ids=payload.get("ids",[])
+    if not ids: return jsonify({"ok":False,"error":"Geen IDs opgegeven"}),400
+    created=0; errors=[]; api=make_api(cfg)
+    movies_sub=storage_subdir(cfg,"movies"); series_sub=storage_subdir(cfg,"series")
+    cf=_cf("movies.json"); movie_cache={}
     if cf.exists():
         try:
             for it in (json.loads(cf.read_text()).get("items") or []):
-                movie_cache[str(it.get("stream_id"))] = it
-        except Exception:
-            pass
-
+                movie_cache[str(it.get("stream_id"))]=it
+        except Exception: pass
     for sid in ids:
         try:
-            sid = str(sid)
-            if kind == "movie":
-                it        = movie_cache.get(sid, {})
-                title_raw = it.get("name") or f"Movie {sid}"
-                tmdb_id   = (it.get("tmdb") or "").strip()
-                ext       = pick_ext(it.get("container_extension"), cfg["ext"]["movie"] or "mp4")
-                url       = api.vod_url(sid, ext)
-                sb        = sanitize(f"{tmdb_id} - {sanitize(title_raw)}") if tmdb_id else sanitize(title_raw)
-                remote    = f"{cfg['output']['movies']}/{sb}/{sb}.strm"
-                storage_write_strm(remote, url, cfg)
-                created += 1
-            elif kind == "series":
-                data  = api.get_series_info(sid)
-                sname = sanitize(
-                    (data.get("info") or {}).get("name") or
-                    (data.get("info") or {}).get("title") or f"Series {sid}"
-                )
-                eps_by_season = data.get("episodes") or {}
-                if not eps_by_season:
-                    errors.append(f"Geen afleveringen voor serie {sid}")
-                    continue
-                for sk, eplist in sorted(eps_by_season.items(),
-                                         key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
-                    try: sn = int(sk)
-                    except ValueError: sn = 0
+            sid=str(sid)
+            if kind=="movie":
+                it=movie_cache.get(sid,{}); title_raw=it.get("name") or f"Movie {sid}"
+                tmdb_id=(it.get("tmdb") or "").strip()
+                ext=pick_ext(it.get("container_extension"),cfg["ext"]["movie"] or "mp4")
+                url=api.vod_url(sid,ext)
+                sb=sanitize(f"{tmdb_id} - {sanitize(title_raw)}") if tmdb_id else sanitize(title_raw)
+                storage_write_strm(f"{movies_sub}/{sb}/{sb}.strm", url, cfg, auto_postprocess=False)
+                created+=1
+            elif kind=="series":
+                data=api.get_series_info(sid)
+                sname=sanitize((data.get("info") or {}).get("name") or
+                               (data.get("info") or {}).get("title") or f"Series {sid}")
+                eps=data.get("episodes") or {}
+                if not eps: errors.append(f"Geen afleveringen voor {sid}"); continue
+                for sk,eplist in sorted(eps.items(),key=lambda kv:int(kv[0]) if str(kv[0]).isdigit() else 0):
+                    try: sn=int(sk)
+                    except ValueError: sn=0
                     for ep in (eplist or []):
-                        en  = ep.get("episode_num") or ep.get("episode") or 0
-                        try: en = int(en)
-                        except Exception: en = 0
-                        eid    = ep.get("id") or ep.get("episode_id") or ep.get("stream_id")
-                        ext    = pick_ext(ep.get("container_extension") or cfg["ext"]["episode"], "mp4")
-                        url    = api.episode_url(eid, ext)
-                        fname  = f"{sname} S{sn:02d}E{en:02d}.strm"
-                        remote = f"{cfg['output']['series']}/{sname}/{fname}"
-                        storage_write_strm(remote, url, cfg)
-                        created += 1
-        except Exception as e:
-            errors.append(f"{sid}: {e}")
-
-    return jsonify({"ok": True, "created": created, "errors": errors})
+                        en=ep.get("episode_num") or ep.get("episode") or 0
+                        try: en=int(en)
+                        except Exception: en=0
+                        eid=ep.get("id") or ep.get("episode_id") or ep.get("stream_id")
+                        ext=pick_ext(ep.get("container_extension") or cfg["ext"]["episode"],"mp4")
+                        storage_write_strm(
+                            f"{series_sub}/{sname}/{sname} S{sn:02d}E{en:02d}.strm",
+                            api.episode_url(eid,ext), cfg, auto_postprocess=False)
+                        created+=1
+        except Exception as ex: errors.append(f"{sid}: {ex}")
+    if storage_mode(cfg) == "mount" and created > 0:
+        if kind=="movie": postprocess_movies(cfg)
+        else:             postprocess_series(cfg)
+    return jsonify({"ok":True,"created":created,"errors":errors})
 
 @app.post("/api/library/refresh")
 def api_library_refresh():
-    """Wis de SMB/FTP cache zodat de bibliotheek bij de volgende pageload vers ophaalt."""
-    import shutil
-    cleared = []
-    for name in ("smb_cache", "ftp_cache"):
-        p = Path(DATA_DIR) / name
-        if p.exists():
-            shutil.rmtree(p)
-            cleared.append(name)
-    return jsonify({"ok": True, "cleared": cleared})
+    return jsonify({"ok":True})
 
 # ── API: Queue ────────────────────────────────────────────────────
 @app.get("/api/queue")
@@ -1374,12 +1362,15 @@ def api_retry(iid): download_queue.retry(iid); return jsonify({"ok":True})
 @app.post("/api/postprocess")
 def api_postprocess():
     cfg=load_conf(); scope=(request.get_json(force=True) or {}).get("scope","all")
+    if storage_mode(cfg) != "mount":
+        return jsonify({"ok":True,"results":{},
+                        "info":"SMB/FTP mode: namen worden gecleand bij aanmaken."})
     res={}
     if scope in ("all","movies"): res["movies"]=postprocess_movies(cfg)
     if scope in ("all","series"): res["series"]=postprocess_series(cfg)
     return jsonify({"ok":True,"results":res})
 
-# ── API: Test verbindingen ────────────────────────────────────────
+# ── API: Tests ────────────────────────────────────────────────────
 @app.post("/api/test/xtream")
 def api_test_xtream():
     try:
@@ -1399,34 +1390,29 @@ def api_test_jellyfin():
     except Exception as e: return jsonify({"ok":False,"error":str(e)})
 
 @app.post("/api/test/smb")
-def api_test_smb():
-    return jsonify(smb_test(load_conf()))
+def api_test_smb(): return jsonify(smb_test(load_conf()))
 
 @app.post("/api/test/ftp")
-def api_test_ftp():
-    return jsonify(ftp_test(load_conf()))
+def api_test_ftp(): return jsonify(ftp_test(load_conf()))
 
 @app.post("/api/test/tmdb")
 def api_test_tmdb():
-    cfg=load_conf()
-    key=cfg.get("tmdb",{}).get("api_key","")
+    cfg=load_conf(); key=cfg.get("tmdb",{}).get("api_key","")
     if not key: return jsonify({"ok":False,"error":"Geen API key ingevuld"})
     try:
-        r=_requests.get(f"https://api.themoviedb.org/3/configuration",
-                        params={"api_key":key},timeout=8)
+        r=_requests.get("https://api.themoviedb.org/3/configuration",params={"api_key":key},timeout=8)
         if r.ok: return jsonify({"ok":True,"message":"TMDB verbinding geslaagd"})
         return jsonify({"ok":False,"error":f"HTTP {r.status_code} – ongeldige API key?"})
     except Exception as e: return jsonify({"ok":False,"error":str(e)})
 
 @app.post("/api/test/opensubtitles")
 def api_test_opensubtitles():
-    cfg=load_conf()
-    o=cfg.get("opensubtitles",{})
+    cfg=load_conf(); o=cfg.get("opensubtitles",{})
     if not o.get("api_key"): return jsonify({"ok":False,"error":"Geen API key ingevuld"})
-    global _os_token; _os_token=None  # reset zodat we echt testen
+    global _os_token; _os_token=None
     token=os_login(cfg)
     if token: return jsonify({"ok":True,"message":"OpenSubtitles login geslaagd"})
-    return jsonify({"ok":False,"error":"Login mislukt – controleer API key, gebruikersnaam en wachtwoord"})
+    return jsonify({"ok":False,"error":"Login mislukt – controleer credentials"})
 
-if __name__=="__main__":
-    app.run(host="0.0.0.0",port=int(os.environ.get("PORT","8080")),debug=False)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT","8080")), debug=False)
