@@ -1,0 +1,440 @@
+{% extends "base.html" %}
+{% block title %}Discover – MediaManager{% endblock %}
+
+{% block content %}
+<style>
+/* ── Discover layout ── */
+.discover-hero {
+  position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+  margin-bottom: 2rem;
+  min-height: 340px;
+  background: #111;
+  display: flex;
+  align-items: flex-end;
+}
+.discover-hero-bg {
+  position: absolute; inset: 0;
+  background-size: cover;
+  background-position: center 20%;
+  filter: brightness(0.45);
+  transition: background-image 0.5s ease;
+}
+.discover-hero-content {
+  position: relative;
+  padding: 2rem;
+  background: linear-gradient(to top, rgba(0,0,0,.92) 0%, rgba(0,0,0,.3) 60%, transparent 100%);
+  width: 100%;
+}
+.discover-hero-title { font-size: 2rem; font-weight: 700; color: #fff; margin: 0 0 .25rem; }
+.discover-hero-meta  { color: #aaa; font-size: .9rem; margin-bottom: .75rem; }
+.discover-hero-overview { color: #ccc; font-size: .9rem; max-width: 600px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+.section-title {
+  font-size: 1.15rem; font-weight: 700;
+  color: var(--bs-body-color);
+  margin: 0 0 1rem;
+  display: flex; align-items: center; gap: .5rem;
+}
+
+/* ── Poster grid ── */
+.poster-row {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+.poster-row::-webkit-scrollbar { height: 4px; }
+.poster-row::-webkit-scrollbar-track { background: transparent; }
+.poster-row::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
+
+.poster-card {
+  flex: 0 0 140px;
+  scroll-snap-align: start;
+  cursor: pointer;
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #1a1a1a;
+  transition: transform .2s, box-shadow .2s;
+}
+.poster-card:hover { transform: translateY(-4px) scale(1.03); box-shadow: 0 8px 24px rgba(0,0,0,.6); }
+.poster-card img { width: 100%; aspect-ratio: 2/3; object-fit: cover; display: block; }
+.poster-card .poster-info {
+  padding: 8px;
+  font-size: .75rem;
+}
+.poster-card .poster-title { font-weight: 600; color: #eee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.poster-card .poster-meta  { color: #888; margin-top: 2px; }
+.poster-card .poster-rating { position: absolute; top: 6px; right: 6px; background: rgba(0,0,0,.75); color: #f5c518; font-size: .7rem; font-weight: 700; padding: 2px 6px; border-radius: 20px; }
+.poster-card .poster-rank  { position: absolute; top: 6px; left: 6px; background: rgba(255,90,0,.85); color: #fff; font-size: .7rem; font-weight: 800; padding: 2px 7px; border-radius: 20px; }
+.poster-placeholder { width: 140px; aspect-ratio: 2/3; background: #222; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 2rem; flex: 0 0 140px; }
+
+/* ── Modal ── */
+.discover-modal-poster { width: 140px; border-radius: 10px; flex-shrink: 0; }
+.discover-modal-body { display: flex; gap: 1.25rem; }
+@media(max-width:576px) {
+  .discover-modal-body { flex-direction: column; }
+  .discover-modal-poster { width: 100%; max-width: 200px; }
+}
+
+/* ── Tabs ── */
+.discover-section { margin-bottom: 2.5rem; }
+.section-divider { border-color: #333; margin: 2rem 0; }
+
+/* ── Skeleton loader ── */
+.skeleton { background: linear-gradient(90deg, #1e1e1e 25%, #2a2a2a 50%, #1e1e1e 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 10px; }
+@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+.skeleton-poster { width: 140px; aspect-ratio: 2/3; flex: 0 0 140px; }
+</style>
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <h2 class="mb-0">🔥 Discover</h2>
+  <div class="d-flex gap-2">
+    <button class="btn btn-outline-secondary btn-sm" onclick="loadDiscover(true)">🔄 Verversen</button>
+  </div>
+</div>
+
+<!-- Hero -->
+<div class="discover-hero" id="hero" style="display:none!important">
+  <div class="discover-hero-bg" id="hero-bg"></div>
+  <div class="discover-hero-content">
+    <div class="discover-hero-title" id="hero-title"></div>
+    <div class="discover-hero-meta"  id="hero-meta"></div>
+    <div class="discover-hero-overview" id="hero-overview"></div>
+    <div class="mt-3 d-flex gap-2 flex-wrap">
+      <button class="btn btn-warning btn-sm fw-bold" id="hero-strm-btn">➕ .strm aanmaken</button>
+      <button class="btn btn-outline-light btn-sm" id="hero-info-btn">ℹ️ Info</button>
+    </div>
+  </div>
+</div>
+
+<!-- Loading skeleton -->
+<div id="discover-loading">
+  <div class="section-title">⏳ Laden...</div>
+  <div class="poster-row mb-4" id="skel-row-1">
+    {% for _ in range(8) %}<div class="skeleton skeleton-poster"></div>{% endfor %}
+  </div>
+  <div class="poster-row" id="skel-row-2">
+    {% for _ in range(8) %}<div class="skeleton skeleton-poster"></div>{% endfor %}
+  </div>
+</div>
+
+<!-- No TMDB key notice -->
+<div id="no-tmdb" style="display:none" class="text-center py-5">
+  <div style="font-size:3rem">🔑</div>
+  <h5 class="mt-3">TMDB API key vereist</h5>
+  <p class="text-muted">Voeg een TMDB API key toe via <a href="/settings">Instellingen → TMDB</a> om Discover te gebruiken. De key is gratis aan te vragen op <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org</a>.</p>
+</div>
+
+<!-- Content -->
+<div id="discover-content" style="display:none">
+
+  <!-- Trending deze week -->
+  <div class="discover-section">
+    <div class="section-title">🔥 Trending deze week</div>
+    <div class="poster-row" id="row-trending"></div>
+  </div>
+
+  <hr class="section-divider">
+
+  <!-- Nu in de bioscoop -->
+  <div class="discover-section">
+    <div class="section-title">🎭 Nu in de bioscoop</div>
+    <div class="poster-row" id="row-nowplaying"></div>
+  </div>
+
+  <hr class="section-divider">
+
+  <!-- Trending films -->
+  <div class="discover-section">
+    <div class="section-title">🎬 Trending films</div>
+    <div class="poster-row" id="row-popmovies"></div>
+  </div>
+
+  <hr class="section-divider">
+
+  <!-- Trending series -->
+  <div class="discover-section">
+    <div class="section-title">📺 Trending series</div>
+    <div class="poster-row" id="row-trendseries"></div>
+  </div>
+
+</div>
+
+<!-- Detail modal -->
+<div class="modal fade" id="detailModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content" style="background:#1a1a1a;border:1px solid #333">
+      <div class="modal-header border-0 pb-0">
+        <h5 class="modal-title" id="modal-title"></h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body pt-2">
+        <div class="discover-modal-body">
+          <img id="modal-poster" class="discover-modal-poster" src="" alt="" style="display:none">
+          <div class="flex-grow-1">
+            <div class="text-muted small mb-2" id="modal-meta"></div>
+            <p id="modal-overview" class="small" style="color:#ccc"></p>
+            <div class="mt-3" id="modal-actions"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const POSTER_BASE = "https://image.tmdb.org/t/p/w342";
+let _data = null;
+let _heroItems = [];
+let _heroIdx   = 0;
+let _heroTimer  = null;
+
+// ── Laden ────────────────────────────────────────────────────────
+async function loadDiscover(force=false) {
+  document.getElementById("discover-loading").style.display = "";
+  document.getElementById("discover-content").style.display = "none";
+  document.getElementById("no-tmdb").style.display = "none";
+
+  const url = force ? "/api/discover?refresh=1" : "/api/discover";
+  try {
+    const d = await fetch(url).then(r => r.json());
+    document.getElementById("discover-loading").style.display = "none";
+
+    if (!d.ok) {
+      document.getElementById("no-tmdb").style.display = "";
+      return;
+    }
+    _data = d.data;
+    renderAll();
+  } catch(err) {
+    document.getElementById("discover-loading").style.display = "none";
+    showToast("❌ Laden mislukt: " + err, "error");
+  }
+}
+
+function renderAll() {
+  const c = document.getElementById("discover-content");
+  c.style.display = "";
+
+  renderRow("row-trending",    _data.trending_all?.slice(0,20)    || [], true);
+  renderRow("row-nowplaying",  _data.now_playing?.slice(0,20)     || []);
+  renderRow("row-popmovies",   _data.popular_movies?.slice(0,20)  || []);
+  renderRow("row-trendseries", _data.trending_series?.slice(0,20) || []);
+
+  // Hero: top trending items met backdrop
+  _heroItems = (_data.trending_all || []).filter(x => x.backdrop).slice(0, 8);
+  if (_heroItems.length) {
+    document.getElementById("hero").style.removeProperty("display");
+    setHero(0);
+    clearInterval(_heroTimer);
+    _heroTimer = setInterval(() => setHero((_heroIdx+1) % _heroItems.length), 7000);
+  }
+}
+
+function setHero(idx) {
+  _heroIdx = idx;
+  const item = _heroItems[idx];
+  if (!item) return;
+  document.getElementById("hero-bg").style.backgroundImage = `url(${item.backdrop})`;
+  document.getElementById("hero-title").textContent = item.title;
+  document.getElementById("hero-meta").textContent =
+    [item.year, item.rating ? "⭐ " + item.rating : ""].filter(Boolean).join(" · ");
+  document.getElementById("hero-overview").textContent = item.overview || "";
+  const type = item.media_type === "tv" ? "series" : "movie";
+  document.getElementById("hero-strm-btn").onclick = () => openDetail(item, type);
+  document.getElementById("hero-info-btn").onclick = () => openDetail(item, type);
+}
+
+// ── Render rij ───────────────────────────────────────────────────
+function renderRow(id, items, showRank=false, showRankNum=false) {
+  const row = document.getElementById(id);
+  if (!row) return;
+  row.innerHTML = "";
+  if (!items.length) { row.innerHTML = '<div class="text-muted small">Geen resultaten</div>'; return; }
+
+  items.forEach((item, i) => {
+    const type = item.media_type === "tv" ? "series" : "movie";
+    const card = document.createElement("div");
+    card.className = "poster-card";
+    card.title = item.title;
+    card.onclick = () => openDetail(item, type);
+
+    const img = item.poster
+      ? `<img src="${item.poster}" alt="${esc(item.title)}" loading="lazy">`
+      : `<div class="poster-placeholder">🎬</div>`;
+
+    const rank = showRankNum ? `<span class="poster-rank">#${i+1}</span>` : "";
+    const rating = item.rating ? `<span class="poster-rating">⭐ ${item.rating}</span>` : "";
+
+    card.innerHTML = `
+      ${img}
+      ${rank}${rating}
+      <div class="poster-info">
+        <div class="poster-title">${esc(item.title)}</div>
+        <div class="poster-meta">${item.year || ""}</div>
+      </div>`;
+    row.appendChild(card);
+  });
+}
+
+// ── Detail modal ─────────────────────────────────────────────────
+function openDetail(item, type) {
+  const modal = new bootstrap.Modal(document.getElementById("detailModal"));
+  document.getElementById("modal-title").textContent = item.title;
+  document.getElementById("modal-meta").textContent =
+    [item.year, item.rating ? "⭐ " + item.rating : ""].filter(Boolean).join(" · ");
+  document.getElementById("modal-overview").textContent = item.overview || "Geen omschrijving beschikbaar.";
+
+  const poster = document.getElementById("modal-poster");
+  if (item.poster) { poster.src = item.poster; poster.style.display = ""; }
+  else poster.style.display = "none";
+
+  const actions = document.getElementById("modal-actions");
+  actions.innerHTML = "";
+
+  if (type === "movie") {
+    const btn = mkBtn("🔍 Zoek in IPTV provider", "btn-warning", async () => {
+      btn.disabled = true; btn.textContent = "⏳ Zoeken...";
+      actions.innerHTML = `<div class="text-muted small mb-2">
+        <span class="spinner-border spinner-border-sm me-1"></span>Zoeken naar <strong>${esc(item.title)}</strong>...</div>`;
+
+      try {
+        const res = await fetch(`/api/movies?q=${encodeURIComponent(item.title)}`).then(r=>r.json());
+        const matches = res.items || [];
+
+        if (!matches.length) {
+          actions.innerHTML = `<div class="alert alert-warning py-2 mb-2">
+            ⚠️ Niet gevonden bij jouw IPTV provider.</div>`;
+        } else {
+          // Toon alle resultaten zodat gebruiker kan kiezen
+          let html = `<div class="mb-2 text-muted small">${matches.length} resultaat/resultaten — kies de gewenste versie:</div>
+            <div class="list-group list-group-flush" style="max-height:260px;overflow-y:auto">`;
+          matches.forEach(m => {
+            const label = esc(m.name || "");
+            const ext   = esc(m.container_extension || "mp4");
+            html += `<button type="button"
+              class="list-group-item list-group-item-action list-group-item-dark d-flex justify-content-between align-items-center py-2"
+              onclick="createStrmFromMatch(${m.stream_id}, '${(m.name||'').replace(/'/g,"\\'")}', '${m.container_extension||''}')">
+              <span class="text-truncate me-2">${label}</span>
+              <span class="badge bg-secondary flex-shrink-0">${ext}</span>
+            </button>`;
+          });
+          html += `</div>`;
+          actions.innerHTML = html;
+        }
+      } catch(ex) {
+        actions.innerHTML = `<div class="alert alert-danger py-2">Fout: ${esc(ex.message)}</div>`;
+      }
+    });
+    actions.appendChild(btn);
+  } else {
+    const btn = mkBtn("🔍 Zoek in IPTV provider", "btn-warning", async () => {
+      btn.disabled = true; btn.textContent = "⏳ Zoeken...";
+      actions.innerHTML = `<div class="text-muted small mb-2">
+        <span class="spinner-border spinner-border-sm me-1"></span>Zoeken naar <strong>${esc(item.title)}</strong>...</div>`;
+      try {
+        const res = await fetch(`/api/series?q=${encodeURIComponent(item.title)}`).then(r=>r.json());
+        const matches = res.items || [];
+        if (!matches.length) {
+          actions.innerHTML = `<div class="alert alert-warning py-2 mb-2">
+            ⚠️ Niet gevonden bij jouw IPTV provider.</div>`;
+        } else {
+          let html = `<div class="mb-2 text-muted small">${matches.length} resultaat/resultaten — kies de gewenste versie:</div>
+            <div class="list-group list-group-flush" style="max-height:260px;overflow-y:auto">`;
+          matches.forEach(m => {
+            html += `<button type="button"
+              class="list-group-item list-group-item-action list-group-item-dark py-2"
+              onclick="createSeriesFromMatch(${m.series_id}, '${(m.name||'').replace(/'/g,"\\'")}')">
+              ${esc(m.name || "")}
+            </button>`;
+          });
+          html += `</div>`;
+          actions.innerHTML = html;
+        }
+      } catch(ex) {
+        actions.innerHTML = `<div class="alert alert-danger py-2">Fout: ${esc(ex.message)}</div>`;
+      }
+    });
+    actions.appendChild(btn);
+  }
+
+  // TMDB link
+  const ext = document.createElement("a");
+  ext.href = `https://www.themoviedb.org/${type === "movie" ? "movie" : "tv"}/${item.id}`;
+  ext.target = "_blank";
+  ext.className = "btn btn-outline-secondary btn-sm";
+  ext.textContent = "🌐 TMDB pagina";
+  actions.appendChild(ext);
+
+  modal.show();
+}
+
+async function createStrmFromMatch(streamId, name, ext) {
+  const actions = document.getElementById("modal-actions");
+  actions.innerHTML = `<div class="text-muted small">
+    <span class="spinner-border spinner-border-sm me-1"></span>
+    .strm aanmaken voor <strong>${esc(name)}</strong>...</div>`;
+  try {
+    const r = await fetch("/api/strm/movie", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({stream_id: streamId, title: name, ext})
+    }).then(r=>r.json());
+    if (r.ok) {
+      showToast("✅ .strm aangemaakt: " + name, "success");
+      bootstrap.Modal.getInstance(document.getElementById("detailModal"))?.hide();
+    } else {
+      actions.innerHTML = `<div class="alert alert-danger py-2">❌ ${esc(r.error)}</div>`;
+    }
+  } catch(ex) {
+    actions.innerHTML = `<div class="alert alert-danger py-2">Fout: ${esc(ex.message)}</div>`;
+  }
+}
+
+async function createSeriesFromMatch(seriesId, name) {
+  const actions = document.getElementById("modal-actions");
+  actions.innerHTML = `<div class="text-muted small">
+    <span class="spinner-border spinner-border-sm me-1"></span>
+    Serie afleveringen ophalen voor <strong>${esc(name)}</strong>...</div>`;
+  try {
+    const r = await fetch("/api/strm/series", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({series_id: seriesId})
+    }).then(r=>r.json());
+    if (r.ok) {
+      showToast(`✅ ${r.count} .strm bestanden aangemaakt voor ${name}`, "success");
+      bootstrap.Modal.getInstance(document.getElementById("detailModal"))?.hide();
+    } else {
+      actions.innerHTML = `<div class="alert alert-danger py-2">❌ ${esc(r.error)}</div>`;
+    }
+  } catch(ex) {
+    actions.innerHTML = `<div class="alert alert-danger py-2">Fout: ${esc(ex.message)}</div>`;
+  }
+}
+
+function mkBtn(label, cls, fn) {
+  const b = document.createElement("button");
+  b.className = `btn ${cls} btn-sm fw-bold`;
+  b.textContent = label;
+  b.onclick = fn;
+  return b;
+}
+
+function esc(s) {
+  return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// ── Browse voorinvullen via URL params ───────────────────────────
+window.addEventListener("DOMContentLoaded", () => {
+  loadDiscover();
+});
+</script>
+{% endblock %}

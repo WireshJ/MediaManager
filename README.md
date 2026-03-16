@@ -5,24 +5,24 @@ Gecombineerde applicatie van **m3udownloader** + **xstream-studio** voor het beh
 ## Functies
 
 - **Browse** — Zoek en maak `.strm` bestanden via Xtream API (Live, Films, Series)
+- **Discover** — Trending, populaire en binnenkort verschijnende titels via TMDB, direct doorzoekbaar in je IPTV provider
 - **Bibliotheek** — Bekijk alle films en series op je media share, voeg toe aan download queue
 - **Queue** — Download bestanden via yt-dlp met voortgangsbalk en retry
 - **Postprocessing** — Automatisch hernoemen op TMDB ID en prefix/suffix cleaning
 - **Samenvoegen** — Dubbele serie-mappen worden automatisch samengevoegd
-- **Instellingen** — Alles configureerbaar via de UI
+- **Jellyfin push** — Automatische library scan na aanmaken `.strm` of voltooide download
+- **Beveiliging** — Optioneel wachtwoord voor toegang tot de instellingen
 
 ## Vereisten
 
 - Python 3.11+
-- yt-dlp (systeembreed geïnstalleerd, zie hieronder)
+- yt-dlp
 
 ## Installatie
 
 ```bash
 # 1. Installeer yt-dlp systeembreed
 pip install yt-dlp --break-system-packages
-# of via pipx:
-pipx install yt-dlp
 
 # 2. Installeer Python dependencies
 pip install -r requirements.txt --break-system-packages
@@ -37,14 +37,12 @@ python app.py
 Met aangepaste poort of data map:
 
 ```bash
-DATA_DIR=/mnt/config/mediamanager PORT=8080 python app.py
+DATA_DIR=/opt/mediamanager/data PORT=8080 python app.py
 ```
 
 ---
 
 ## Automatisch starten als Linux service (systemd)
-
-Zodat MediaManager automatisch start bij opstarten van de server/container.
 
 ### 1. Maak een service bestand aan
 
@@ -52,7 +50,7 @@ Zodat MediaManager automatisch start bij opstarten van de server/container.
 nano /etc/systemd/system/mediamanager.service
 ```
 
-Plak de volgende inhoud (pas paden aan naar jouw situatie):
+Plak de volgende inhoud en pas de paden aan:
 
 ```ini
 [Unit]
@@ -73,33 +71,22 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
-> **Let op:** Pas `WorkingDirectory` en het pad in `ExecStart` aan naar waar je `app.py` staat.  
 > Gebruik `which python3` om het juiste Python pad te vinden.
 
 ### 2. Activeer en start de service
 
 ```bash
-# Herlaad systemd zodat de nieuwe service wordt herkend
 systemctl daemon-reload
-
-# Zet de service aan bij opstarten
 systemctl enable mediamanager
-
-# Start de service nu direct
 systemctl start mediamanager
-
-# Check of alles draait
 systemctl status mediamanager
 ```
 
 ### 3. Logs bekijken
 
 ```bash
-# Live logs volgen
-journalctl -u mediamanager -f
-
-# Laatste 100 regels
-journalctl -u mediamanager -n 100
+journalctl -u mediamanager -f        # live
+journalctl -u mediamanager -n 100    # laatste 100 regels
 ```
 
 ### 4. Service beheren
@@ -124,7 +111,6 @@ In Instellingen → Storage & Paden kies je één van drie modes:
 
 ### SMB instellen (aanbevolen voor LXC containers)
 
-Vul in Instellingen in:
 - **Host**: IP van je NAS (bijv. `192.168.1.203`)
 - **Share**: naam van de share (bijv. `media`)
 - **Gebruikersnaam / Wachtwoord**: NAS credentials
@@ -147,10 +133,49 @@ Vul in Instellingen in:
 
 Na een succesvolle download wordt het `.strm` bestand automatisch verwijderd.
 
+---
+
+## Beveiliging
+
+De instellingenpagina kan beveiligd worden met een wachtwoord. Dit stel je in onderaan de instellingenpagina bij **Beveiliging**.
+
+- Wachtwoord leeg laten = geen beveiliging
+- Na instellen wordt het wachtwoord gevraagd bij elke sessie
+- Wachtwoord wordt opgeslagen als SHA-256 hash
+- Uitloggen via de knop op de instellingenpagina
+
+---
+
 ## Optionele integraties
 
 | Service | Functie |
 |---------|---------|
-| **Jellyfin** | Automatisch library refresh na download |
-| **TMDB** | Metadata, posters en hernoemen op TMDB ID |
-| **OpenSubtitles** | Automatisch ondertitels downloaden na verwerking |
+| **Jellyfin** | Automatisch library scan na aanmaken `.strm` of voltooide download |
+| **TMDB** | Metadata, posters, hernoemen op TMDB ID en de Discover pagina |
+| **OpenSubtitles** | Automatisch ondertitels downloaden na een download |
+
+### Jellyfin instellen
+
+- **URL**: bijv. `https://jelly.voorbeeld.nl`
+- **API key**: te vinden in Jellyfin → Dashboard → API Keys
+- **Films library ID** / **Series library ID**: optioneel, voor gerichte scans per library. Te vinden in de URL als je een library opent in Jellyfin.
+
+### TMDB instellen
+
+Een gratis API key aanvragen op [themoviedb.org](https://www.themoviedb.org/settings/api). Vereist voor de Discover pagina en automatisch hernoemen van films.
+
+---
+
+## Omgevingsvariabelen
+
+| Variabele | Standaard | Omschrijving |
+|-----------|-----------|--------------|
+| `DATA_DIR` | `./data` | Map voor config, cache en tijdelijke bestanden |
+| `PORT` | `8080` | Poort waarop de app luistert |
+| `APP_SECRET` | *(intern)* | Flask sessie sleutel, stel in voor productie |
+
+Voor productiegebruik altijd een eigen `APP_SECRET` instellen:
+
+```bash
+Environment=APP_SECRET=jouw-eigen-geheime-sleutel
+```
