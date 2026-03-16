@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block title %}Download Queue – MediaManager{% endblock %}
+{% block content %}
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <h2 class="mb-0">⏳ Download Queue</h2>
+</div>
+
+<!-- ── Actieve download ── -->
+<div class="queue-section mb-4">
+  <h5 class="queue-section-title">▶ Actief</h5>
+  <div id="active-wrap">
+    <p class="queue-empty">Niets actief.</p>
+  </div>
+</div>
+
+<!-- ── Wachtrij ── -->
+<div class="queue-section mb-4">
+  <div class="d-flex align-items-center gap-2 mb-3">
+    <h5 class="queue-section-title mb-0">🕐 Wachtrij</h5>
+    <span id="q-badge" class="badge bg-warning text-dark" style="display:none"></span>
+  </div>
+  <div id="queue-list">
+    <p class="queue-empty">Wachtrij is leeg.</p>
+  </div>
+</div>
+
+<!-- ── Geschiedenis ── -->
+<div class="queue-section">
+  <div class="d-flex align-items-center justify-content-between mb-3">
+    <div class="d-flex align-items-center gap-2">
+      <h5 class="queue-section-title mb-0">📋 Geschiedenis</h5>
+      <span id="h-badge" class="badge bg-secondary" style="display:none"></span>
+    </div>
+    <button id="btn-clear" class="btn btn-outline-danger btn-sm" onclick="clearHist()" style="display:none">
+      🗑 Wis alles
+    </button>
+  </div>
+  <div id="hist-list">
+    <p class="queue-empty">Geen geschiedenis.</p>
+  </div>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+function fmt(iso) {
+  if(!iso) return "–";
+  try { return new Date(iso).toLocaleString("nl-NL"); } catch { return iso; }
+}
+
+// ── Actief ────────────────────────────────────────────────────
+function renderActive(cur) {
+  const el=document.getElementById("active-wrap");
+  if(!cur){ el.innerHTML='<p class="queue-empty">Niets actief.</p>'; return; }
+  const pct=Math.round(cur.progress||0);
+  const isDown=cur.status==="downloading";
+  const barColor=isDown?"#ffcc00":"#4caf50";
+  const pulse=pct<100&&isDown?"bar-pulse":"";
+  el.innerHTML=`
+    <div class="active-card">
+      <div class="active-status">${statusIcon(cur.status)} ${cur.status}</div>
+      <div class="active-name">${cur.name}</div>
+      <div class="progress-wrap">
+        <div class="progress-fill ${pulse}" style="width:${pct}%;background:${barColor}"></div>
+      </div>
+      <div class="progress-meta">
+        ${pct>0?`<span>${pct}%</span>`:''}
+        ${cur.speed?`<span>⚡ ${cur.speed}</span>`:''}
+        ${cur.eta?`<span>ETA: ${cur.eta}</span>`:''}
+        ${cur.attempt>1?`<span class="text-muted">poging ${cur.attempt}</span>`:''}
+      </div>
+    </div>`;
+}
+
+// ── Wachtrij ──────────────────────────────────────────────────
+function renderQueue(queue) {
+  const el=document.getElementById("queue-list");
+  const badge=document.getElementById("q-badge");
+  if(!queue.length){ el.innerHTML='<p class="queue-empty">Wachtrij is leeg.</p>'; badge.style.display='none'; return; }
+  badge.textContent=queue.length; badge.style.display='inline';
+  el.innerHTML=queue.map((it,i)=>`
+    <div class="q-item">
+      <span class="q-icon">🕐</span>
+      <span class="q-name">${it.name}</span>
+      <span class="q-meta">#${i+1} · ${fmt(it.added_at)}</span>
+    </div>`).join('');
+}
+
+// ── Geschiedenis ──────────────────────────────────────────────
+function renderHist(hist) {
+  const el=document.getElementById("hist-list");
+  const badge=document.getElementById("h-badge");
+  const clr=document.getElementById("btn-clear");
+  if(!hist.length){ el.innerHTML='<p class="queue-empty">Geen geschiedenis.</p>';
+    badge.style.display='none'; clr.style.display='none'; return; }
+  badge.textContent=hist.length; badge.style.display='inline'; clr.style.display='inline';
+  el.innerHTML=hist.map(it=>{
+    const ok=it.status==="done";
+    return `
+      <div class="h-item ${it.status}">
+        <span class="q-icon">${ok?'✅':'❌'}</span>
+        <div style="flex:1;min-width:0">
+          <div class="q-name">${it.name}</div>
+          ${it.error?`<div class="h-error">${it.error}</div>`:''}
+        </div>
+        <span class="q-meta">${fmt(it.finished_at)}</span>
+        ${!ok?`<button class="btn-icon btn-retry" onclick="retryItem('${it.id}')" title="Opnieuw">🔁</button>`:''}
+        <button class="btn-icon btn-del" onclick="delItem('${it.id}')" title="Verwijder">🗑</button>
+      </div>`;
+  }).join('');
+}
+
+function statusIcon(s) {
+  const m={"queued":"🕐","downloading":"⬇️","uploading":"⬆️","done":"✅","failed":"❌"};
+  return m[s]||"⏳";
+}
+
+// ── Poll ──────────────────────────────────────────────────────
+async function poll() {
+  try {
+    const d=await fetch('/api/queue').then(r=>r.json());
+    renderActive(d.current);
+    renderQueue(d.queue);
+    renderHist(d.history);
+  } catch(e){ console.error('Poll fout:',e); }
+}
+async function delItem(id) {
+  await fetch(`/api/queue/history/${id}`,{method:'DELETE'}); poll();
+}
+async function retryItem(id) {
+  await fetch(`/api/queue/retry/${id}`,{method:'POST'}); poll();
+}
+async function clearHist() {
+  if(!confirm('Wil je de volledige geschiedenis wissen?')) return;
+  await fetch('/api/queue/history',{method:'DELETE'}); poll();
+}
+
+poll();
+setInterval(poll, 2000);
+</script>
+{% endblock %}

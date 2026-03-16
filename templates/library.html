@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% block title %}Bibliotheek – MediaManager{% endblock %}
+{% block content %}
+
+<div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
+  <h2 class="mb-0">📁 Lokale Bibliotheek</h2>
+  <div class="d-flex gap-2">
+    <button type="button" class="btn btn-outline-warning btn-sm" onclick="runPostprocess('movies')" title="Hernoem films op basis van TMDB ID en prefix cleaning">
+      🎬 Films hernoemen
+    </button>
+    <button type="button" class="btn btn-outline-warning btn-sm" onclick="runPostprocess('series')" title="Prefix/suffix cleaning voor series mappen">
+      📺 Series hernoemen
+    </button>
+    <a href="{{ url_for('queue_page') }}" class="btn btn-outline-secondary btn-sm">⏳ Queue</a>
+  </div>
+</div>
+
+<form method="POST" id="lib-form">
+<div class="row g-4">
+
+  <!-- ── FILMS ──────────────────────────────────────────────── -->
+  <div class="col-12">
+    <div class="lib-section">
+      <div class="lib-section-header">
+        <div class="d-flex align-items-center gap-2">
+          <h5 class="mb-0">🎬 Films</h5>
+          <span class="badge bg-secondary">{{ films|length }}</span>
+        </div>
+        {% if films %}
+        <div class="d-flex gap-2">
+          <button type="button" class="btn-sm-dark" onclick="selAllFilms()">✓ Alles</button>
+          <button type="button" class="btn-sm-dark" onclick="deselAllFilms()">✗ Geen</button>
+        </div>
+        {% endif %}
+      </div>
+
+      {% if films %}
+      <div class="poster-grid" id="film-grid">
+        {% for film in films %}
+        {% set display = film.info.title if film.info.title else film.path | basename | replace('.strm','') %}
+        <div class="poster-card" onclick="toggleFilm(this)">
+          <input type="checkbox" name="selected_files" value="{{ film.path }}" onchange="updateBar()" onclick="event.stopPropagation()">
+          {% if film.info.poster %}
+            <img class="poster-img" src="{{ film.info.poster }}" alt="{{ display }}" loading="lazy">
+          {% else %}
+            <div class="poster-placeholder">🎬</div>
+          {% endif %}
+          <div class="selected-overlay"></div>
+          <div class="poster-info">
+            <div class="poster-title">{{ display }}</div>
+            <div class="poster-meta">
+              {% if film.info.year %}<span>{{ film.info.year }}</span>{% endif %}
+              {% if film.info.rating and film.info.rating > 0 %}
+                <span class="poster-rating">★ {{ film.info.rating }}</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="lib-empty">Geen .strm bestanden gevonden in de films map.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- ── SERIES ─────────────────────────────────────────────── -->
+  <div class="col-12">
+    <div class="lib-section">
+      <div class="lib-section-header">
+        <div class="d-flex align-items-center gap-2">
+          <h5 class="mb-0">📺 Series</h5>
+          <span class="badge bg-secondary">{{ series|length }}</span>
+        </div>
+        {% if series %}
+        <div class="d-flex gap-2">
+          <button type="button" class="btn-sm-dark" onclick="selAllSeries()">✓ Alles</button>
+          <button type="button" class="btn-sm-dark" onclick="deselAllSeries()">✗ Geen</button>
+        </div>
+        {% endif %}
+      </div>
+
+      {% if series %}
+      <div class="series-grid">
+        {% for serie_name, serie_data in series.items() %}
+        {% set sid = 's' ~ loop.index %}
+        {% set info = serie_data.info %}
+        <div class="serie-card" id="{{ sid }}-card">
+          <div class="serie-card-header" onclick="toggleSerie('{{ sid }}')">
+            {% if info.poster %}
+              <img class="serie-thumb" src="{{ info.poster }}" alt="{{ serie_name }}" loading="lazy">
+            {% else %}
+              <div class="serie-thumb-ph">📺</div>
+            {% endif %}
+            <div class="serie-card-meta">
+              <div class="serie-card-title">{{ info.title if info.title else serie_name }}</div>
+              <div class="serie-card-sub">
+                {% if info.year %}<span>{{ info.year }}</span>{% endif %}
+                {% if info.rating and info.rating > 0 %}<span class="text-warning">★ {{ info.rating }}</span>{% endif %}
+                <span class="text-muted">{{ serie_data.seasons | length }} seizoen(en)</span>
+              </div>
+              {% if info.overview %}
+              <div class="serie-overview">{{ info.overview }}</div>
+              {% endif %}
+            </div>
+            <span class="serie-arrow" id="{{ sid }}-arrow">▼</span>
+          </div>
+
+          <div class="serie-seasons" id="{{ sid }}-seasons">
+            {% for season_label, eps in serie_data.seasons.items() %}
+            {% set ssid = sid ~ 'z' ~ loop.index %}
+            <div class="season-block">
+              <div class="season-header">
+                <span>{{ season_label }}</span>
+                <span class="text-muted me-2">{{ eps | length }} afl.</span>
+                <button type="button" class="btn-xs-outline" onclick="selSeason('{{ ssid }}','{{ sid }}-card',true); event.stopPropagation()">✓</button>
+                <button type="button" class="btn-xs-outline" onclick="selSeason('{{ ssid }}','{{ sid }}-card',false); event.stopPropagation()">✗</button>
+              </div>
+              <div class="episode-list" id="{{ ssid }}">
+                {% for ep in eps %}
+                <div class="episode-row" onclick="toggleEp(this,'{{ sid }}-card')">
+                  <input type="checkbox" name="selected_files" value="{{ ep }}"
+                         onchange="updateBar()" onclick="event.stopPropagation()">
+                  <label>{{ ep | replace(BASE_SERIES_PATH,'') | replace(serie_name + '/', '') | replace('.strm','') }}</label>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="lib-empty">Geen .strm bestanden gevonden in de series map.</p>
+      {% endif %}
+    </div>
+  </div>
+
+</div><!-- /row -->
+</form>
+
+<!-- ── Selectiebalk ── -->
+<div class="selection-bar" id="sel-bar">
+  <div class="sel-info">
+    <span id="sel-count">0</span> bestand(en) geselecteerd
+  </div>
+  <div class="d-flex gap-2">
+    <button type="button" class="btn btn-outline-light btn-sm" onclick="deselAll()">✕ Deselect</button>
+    <button type="button" class="btn btn-warning btn-sm fw-bold" id="submit-btn" onclick="submitLib()">
+      📥 Toevoegen aan queue
+    </button>
+  </div>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+function allCbs() { return [...document.querySelectorAll('input[name="selected_files"]')]; }
+function checkedN() { return allCbs().filter(c=>c.checked).length; }
+
+function updateBar() {
+  const n = checkedN();
+  document.getElementById("sel-count").textContent = n;
+  document.getElementById("sel-bar").classList.toggle("visible", n > 0);
+}
+function updCard(id) {
+  const card=document.getElementById(id);
+  if(!card) return;
+  card.classList.toggle("has-sel", [...card.querySelectorAll('input')].some(c=>c.checked));
+}
+
+function toggleFilm(card) {
+  const cb=card.querySelector('input'); cb.checked=!cb.checked;
+  card.classList.toggle("selected",cb.checked); updateBar();
+}
+function toggleEp(row,cid) {
+  const cb=row.querySelector('input'); cb.checked=!cb.checked;
+  updCard(cid); updateBar();
+}
+function toggleSerie(sid) {
+  const s=document.getElementById(sid+"-seasons");
+  const a=document.getElementById(sid+"-arrow");
+  const o=s.classList.toggle("open");
+  a.textContent=o?"▲":"▼";
+}
+function selSeason(ssid,cid,v) {
+  document.getElementById(ssid)?.querySelectorAll('input').forEach(cb=>cb.checked=v);
+  updCard(cid); updateBar();
+}
+function selAllFilms() {
+  document.querySelectorAll('#film-grid input').forEach(cb=>{cb.checked=true;cb.closest('.poster-card').classList.add('selected');});
+  updateBar();
+}
+function deselAllFilms() {
+  document.querySelectorAll('#film-grid input').forEach(cb=>{cb.checked=false;cb.closest('.poster-card').classList.remove('selected');});
+  updateBar();
+}
+function selAllSeries() {
+  document.querySelectorAll('.serie-card input').forEach(cb=>cb.checked=true);
+  document.querySelectorAll('.serie-card').forEach(c=>c.classList.add('has-sel'));
+  updateBar();
+}
+function deselAllSeries() {
+  document.querySelectorAll('.serie-card input').forEach(cb=>cb.checked=false);
+  document.querySelectorAll('.serie-card').forEach(c=>c.classList.remove('has-sel'));
+  updateBar();
+}
+function deselAll() {
+  allCbs().forEach(cb=>cb.checked=false);
+  document.querySelectorAll('.poster-card').forEach(c=>c.classList.remove('selected'));
+  document.querySelectorAll('.serie-card').forEach(c=>c.classList.remove('has-sel'));
+  updateBar();
+}
+function submitLib() {
+  if(!checkedN()) return;
+  const btn=document.getElementById('submit-btn');
+  btn.disabled=true; btn.textContent='⏳ Toevoegen...';
+  document.getElementById('lib-form').submit();
+}
+
+async function runPostprocess(scope) {
+  showToast(`⏳ Postprocessing: ${scope}...`,'info');
+  try {
+    const d=await fetch('/api/postprocess',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({scope})}).then(r=>r.json());
+    if(d.ok){
+      const r=d.results[scope]||{};
+      const renamed=(r.renamed||[]).length;
+      const errors=(r.errors||[]).length;
+      showToast(`✅ ${renamed} hernoemd${errors?', '+errors+' fout(en)':''}`,'success');
+      if(errors>0) console.warn('Postprocessing fouten:', r.errors);
+    } else showToast('❌ '+d.error,'error');
+  } catch(e) { showToast('❌ Verzoek mislukt','error'); }
+}
+
+updateBar();
+</script>
+{% endblock %}
