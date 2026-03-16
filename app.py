@@ -685,12 +685,14 @@ def _smb_put(local_path: str, remote_subpath: str, cfg: Dict) -> bool:
         # Maak alle tussenliggende mappen aan
         for i in range(1, len(parts)):
             try: conn.createDirectory(share, "/".join(parts[:i]))
-            except Exception: pass  # map bestaat al, dat is OK
-        # Verwijder bestand als het al bestaat (voorkomt ItemError/lock conflict)
+            except Exception: pass
+        # Verwijder bestand als het al bestaat
         try: conn.deleteFiles(share, remote)
         except Exception: pass
+        # Upload via storeFileFromOffset met offset=0 zodat pysmb
+        # niet het hele bestand in geheugen laadt maar chunked werkt
         with open(local_path, "rb") as f:
-            conn.storeFile(share, remote, f)
+            conn.storeFileFromOffset(share, remote, f, offset=0, truncate=True)
         conn.close()
         return True
     except Exception as e:
@@ -989,6 +991,30 @@ class DownloadQueue:
                         storage_write_file(dest, f"{subdir}/{folder_name}/{file_name}.{lang}.srt", cfg)
 
             jf_refresh(cfg, is_film)
+
+            # Verwijder het .strm bestand nu het .mkv beschikbaar is
+            e["status"] = "strm opruimen..."
+            if mode == "mount":
+                # Lokaal .strm bestand verwijderen
+                strm_path = Path(raw_path)
+                if strm_path.exists() and strm_path.suffix == ".strm":
+                    try: strm_path.unlink()
+                    except Exception as ex: print(f"[!] Kon .strm niet verwijderen: {ex}")
+            elif is_virtual and mode == "smb":
+                # .strm op de SMB share verwijderen
+                try:
+                    conn, share = _smb_connect(cfg)
+                    conn.deleteFiles(share, remote_path)
+                    conn.close()
+                except Exception as ex:
+                    print(f"[!] Kon .strm niet verwijderen van SMB: {ex}")
+            elif is_virtual and mode == "ftp":
+                try:
+                    ftp = _ftp_connect(cfg)
+                    ftp.delete(remote_path)
+                    ftp.quit()
+                except Exception as ex:
+                    print(f"[!] Kon .strm niet verwijderen van FTP: {ex}")
 
             if mode == "mount":
                 e["status"] = "postprocessing..."

@@ -7,22 +7,28 @@ Gecombineerde applicatie van **m3udownloader** + **xstream-studio** voor het beh
 - **Browse** — Zoek en maak `.strm` bestanden via Xtream API (Live, Films, Series)
 - **Bibliotheek** — Bekijk alle films en series op je media share, voeg toe aan download queue
 - **Queue** — Download bestanden via yt-dlp met voortgangsbalk en retry
-- **Postprocessing** — Automatisch hernoemen op TMDB ID en prefix/suffix cleaning (vervangt de bash scripts)
+- **Postprocessing** — Automatisch hernoemen op TMDB ID en prefix/suffix cleaning
 - **Samenvoegen** — Dubbele serie-mappen worden automatisch samengevoegd
 - **Instellingen** — Alles configureerbaar via de UI
 
 ## Vereisten
 
 - Python 3.11+
-- pip packages (zie `requirements.txt`)
+- yt-dlp (systeembreed geïnstalleerd, zie hieronder)
 
 ## Installatie
 
 ```bash
-pip install -r requirements.txt
+# 1. Installeer yt-dlp systeembreed
+pip install yt-dlp --break-system-packages
+# of via pipx:
+pipx install yt-dlp
+
+# 2. Installeer Python dependencies
+pip install -r requirements.txt --break-system-packages
 ```
 
-## Starten
+## Handmatig starten
 
 ```bash
 python app.py
@@ -33,6 +39,78 @@ Met aangepaste poort of data map:
 ```bash
 DATA_DIR=/mnt/config/mediamanager PORT=8080 python app.py
 ```
+
+---
+
+## Automatisch starten als Linux service (systemd)
+
+Zodat MediaManager automatisch start bij opstarten van de server/container.
+
+### 1. Maak een service bestand aan
+
+```bash
+nano /etc/systemd/system/mediamanager.service
+```
+
+Plak de volgende inhoud (pas paden aan naar jouw situatie):
+
+```ini
+[Unit]
+Description=MediaManager IPTV
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/mediamanager
+Environment=DATA_DIR=/opt/mediamanager/data
+Environment=PORT=8080
+ExecStart=/usr/bin/python3 /opt/mediamanager/app.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+> **Let op:** Pas `WorkingDirectory` en het pad in `ExecStart` aan naar waar je `app.py` staat.  
+> Gebruik `which python3` om het juiste Python pad te vinden.
+
+### 2. Activeer en start de service
+
+```bash
+# Herlaad systemd zodat de nieuwe service wordt herkend
+systemctl daemon-reload
+
+# Zet de service aan bij opstarten
+systemctl enable mediamanager
+
+# Start de service nu direct
+systemctl start mediamanager
+
+# Check of alles draait
+systemctl status mediamanager
+```
+
+### 3. Logs bekijken
+
+```bash
+# Live logs volgen
+journalctl -u mediamanager -f
+
+# Laatste 100 regels
+journalctl -u mediamanager -n 100
+```
+
+### 4. Service beheren
+
+```bash
+systemctl stop mediamanager      # stoppen
+systemctl restart mediamanager   # herstarten
+systemctl disable mediamanager   # niet meer automatisch starten
+```
+
+---
 
 ## Storage Modes
 
@@ -55,54 +133,24 @@ Vul in Instellingen in:
 ## Output structuur
 
 ```
-/mnt/media/               ← basis map (of SMB share root)
-├── Live/                 ← live .strm bestanden
+/mnt/media/
+├── Live/
+│   └── Canvas.strm
 ├── Films/
 │   └── The Dark Knight/
-│       └── The Dark Knight.strm
+│       └── The Dark Knight.mkv
 └── Series/
     └── Breaking Bad/
-        ├── Breaking Bad S01E01.strm
         ├── Breaking Bad S01E01.mkv
         └── Breaking Bad S01E01.nl.srt
 ```
 
-## Postprocessing
-
-Vervangt de bash scripts `remove-prefix-movies.sh` en `remove-prefix-series.sh`.
-
-Wat er gestript wordt van map- en bestandsnamen:
-- Channel prefixen: `4K-OSN+ -`, `|EN|`, `NL -`, `beQ -`, etc.
-- Jaar: `(2011)`, `(2023)`
-- Landcode: `(US)`, `(NL)`, `(JP)`
-- Kwaliteitslabels: `4K`, `1080p`, `HDR`, `BluRay`, etc.
-
-Dubbele serie-mappen (bijv. `Better Call Saul` + `EN - Better Call Saul (US)`) worden automatisch samengevoegd.
-
-Postprocessing draait automatisch na elke `.strm` aanmaak en na elke download. Handmatig via de knoppen op de Bibliotheek pagina.
+Na een succesvolle download wordt het `.strm` bestand automatisch verwijderd.
 
 ## Optionele integraties
-
-Alle integraties zijn optioneel en in/uitschakelbaar via Instellingen:
 
 | Service | Functie |
 |---------|---------|
 | **Jellyfin** | Automatisch library refresh na download |
 | **TMDB** | Metadata, posters en hernoemen op TMDB ID |
 | **OpenSubtitles** | Automatisch ondertitels downloaden na verwerking |
-
-## Docker / LXC
-
-```dockerfile
-FROM python:3.12-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-ENV DATA_DIR=/data
-VOLUME ["/data"]
-EXPOSE 8080
-CMD ["python", "app.py"]
-```
-
-> **Let op:** In een Docker container of LXC gebruik je SMB of FTP mode om bestanden op de NAS op te slaan. Mount mode vereist directe toegang tot het bestandssysteem.
