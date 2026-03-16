@@ -1,0 +1,65 @@
+{
+  "xtream": {
+    "server": "http://cf.business-cdn-8k.ru/",
+    "port": 0,
+    "user": "af62e82cc84a",
+    "pwd": "9e027a7994",
+    "verify_tls": false,
+    "timeout": 15
+  },
+  "output": {
+    "base": "/media/library",
+    "live": "Live",
+    "movies": "Movies",
+    "series": "Series"
+  },
+  "ext": {
+    "live": "ts",
+    "movie": null,
+    "episode": null
+  },
+  "cache": {
+    "ttl_hours": 6
+  },
+  "storage": {
+    "mode": "smb",
+    "smb": {
+      "host": "192.168.1.203",
+      "share": "media",
+      "user": "homeassistant",
+      "password": "@Jawalaw14",
+      "domain": "",
+      "films_path": "Films",
+      "series_path": "Series"
+    },
+    "ftp": {
+      "host": "",
+      "port": 21,
+      "user": "",
+      "password": "",
+      "films_path": "/media/Films",
+      "series_path": "/media/Series"
+    }
+  },
+  "jellyfin": {
+    "enabled": true,
+    "url": "https://jelly.jawala-it.nl",
+    "api_key": "39ef11d553ef4aac8d0d9fc848fac8c4",
+    "films_library_id": "db4c1708cbb5dd1676284a40f2950aba",
+    "series_library_id": "5ddaa59a73205234890fdcfc683e14ed"
+  },
+  "tmdb": {
+    "enabled": true,
+    "api_key": "1cfb71616a94baaaff9dd93290a61d26"
+  },
+  "opensubtitles": {
+    "enabled": true,
+    "api_key": "MbIFHRZeuW2JVKJKElc6pkHVHuoaPWRW",
+    "username": "wiresh",
+    "password": "H%Bz8c&CcD$M^u",
+    "langs": [
+      "nl",
+      "en"
+    ]
+  }
+}
