@@ -406,6 +406,53 @@
     </div>
   </div>
 
+  <!-- ══ BEVEILIGING ═══════════════════════════════════════════ -->
+  <div class="col-12">
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="d-flex align-items-center gap-2">
+          <span class="settings-icon">🔒</span>
+          <div>
+            <h5 class="mb-0">Beveiliging</h5>
+            <small class="text-muted">Wachtwoord voor toegang tot de instellingen</small>
+          </div>
+        </div>
+        {% if settings_locked %}
+        <span class="badge bg-success">Beveiligd</span>
+        {% else %}
+        <span class="badge bg-secondary">Geen wachtwoord</span>
+        {% endif %}
+      </div>
+      <form method="POST">
+        <input type="hidden" name="section" value="app">
+        <div class="row g-3">
+          {% if settings_locked %}
+          <div class="col-md-4">
+            <label class="form-label">Huidig wachtwoord</label>
+            <input type="password" class="form-control" name="current_password"
+                   placeholder="Verplicht bij wijzigen">
+          </div>
+          {% endif %}
+          <div class="col-md-4">
+            <label class="form-label">Nieuw wachtwoord</label>
+            <input type="password" class="form-control" name="new_password"
+                   placeholder="Leeg laten = beveiliging uitzetten">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">Herhaal wachtwoord</label>
+            <input type="password" class="form-control" name="confirm_password">
+          </div>
+          <div class="col-12 d-flex gap-2">
+            <button type="submit" class="btn btn-primary">💾 Opslaan</button>
+            {% if settings_locked %}
+            <a href="/settings/logout" class="btn btn-outline-danger">🔓 Uitloggen</a>
+            {% endif %}
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
 </div>
 {% endblock %}
 

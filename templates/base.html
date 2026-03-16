@@ -27,6 +27,12 @@
           </a>
         </li>
         <li class="nav-item">
+          <a class="nav-link {% if request.endpoint == 'discover' %}active{% endif %}"
+             href="{{ url_for('discover') }}">
+            🔥 Discover
+          </a>
+        </li>
+        <li class="nav-item">
           <a class="nav-link {% if request.endpoint == 'library' %}active{% endif %}"
              href="{{ url_for('library') }}">
             📁 Bibliotheek

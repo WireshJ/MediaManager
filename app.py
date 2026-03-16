@@ -1,8 +1,8 @@
 from __future__ import annotations
-import os, json, re, datetime, threading, uuid, time, subprocess, shutil, tempfile, io
+import os, json, re, datetime, threading, uuid, time, subprocess, shutil, tempfile, io, hashlib, secrets
 from typing import Any, Dict, Optional, List
 from collections import defaultdict, OrderedDict
-from flask import Flask, render_template, request, redirect, url_for, jsonify, flash
+from flask import Flask, render_template, request, redirect, url_for, jsonify, flash, session
 from pathlib import Path
 import requests as _requests
 
@@ -113,6 +113,7 @@ DEFAULT_CONF: Dict[str, Any] = {
     "jellyfin":{"enabled":False,"url":"","api_key":"","films_library_id":"","series_library_id":""},
     "tmdb":    {"enabled":False,"api_key":""},
     "opensubtitles":{"enabled":False,"api_key":"","username":"","password":"","langs":["nl","en"]},
+    "app":     {"settings_password":""},  # leeg = geen beveiliging
 }
 
 def _deep_merge(default: dict, saved: dict) -> dict:
@@ -142,6 +143,23 @@ def save_conf(cfg: Dict) -> None:
 
 def out_path(cfg: Dict, key: str) -> Path:
     return Path(cfg["output"]["base"]) / cfg["output"].get(key,key)
+
+# ── Instellingen beveiliging ──────────────────────────────────────
+def _hash_pw(pw: str) -> str:
+    return hashlib.sha256(pw.encode()).hexdigest()
+
+def _settings_locked(cfg: Dict) -> bool:
+    """Geeft True als instellingen beveiligd zijn met een wachtwoord."""
+    return bool((cfg.get("app") or {}).get("settings_password","").strip())
+
+def _settings_authenticated() -> bool:
+    """Geeft True als de huidige sessie geauthenticeerd is."""
+    return session.get("settings_auth") is True
+
+def _require_settings_auth(cfg: Dict):
+    """Redirect naar login als instellingen beveiligd zijn en sessie niet geauthenticeerd."""
+    if _settings_locked(cfg) and not _settings_authenticated():
+        return redirect(url_for("settings_login"))
 
 # ── Xtream ────────────────────────────────────────────────────────
 def sanitize(name: str) -> str:
@@ -308,6 +326,61 @@ def tmdb_by_id(tmdb_id, key):
                     "year":(d.get("release_date") or "")[:4]}
     except Exception: pass
     return None
+
+def tmdb_discover(key: str) -> dict:
+    """Haal trending/populaire films en series op via TMDB."""
+    if not key: return {}
+    cache_key = "tmdb_discover"
+    if cache_key in _tc:
+        cached = _tc[cache_key]
+        # Cache 6 uur geldig
+        try:
+            age = (datetime.datetime.now(datetime.timezone.utc) -
+                   datetime.datetime.fromisoformat(cached.get("fetched_at","2000-01-01")
+                   ).replace(tzinfo=datetime.timezone.utc)).total_seconds()
+            if age < 6 * 3600:
+                return cached
+        except Exception: pass
+
+    def _fetch(endpoint, params=None):
+        p = {"api_key": key, "language": "nl", **(params or {})}
+        try:
+            r = _requests.get(f"https://api.themoviedb.org/3{endpoint}", params=p, timeout=8)
+            return r.json().get("results", []) if r.ok else []
+        except Exception: return []
+
+    def _fmt_movies(items):
+        return [{"id": x.get("id"), "title": x.get("title") or x.get("name",""),
+                 "year": (x.get("release_date") or x.get("first_air_date",""))[:4],
+                 "rating": round(x.get("vote_average",0),1),
+                 "overview": (x.get("overview") or "")[:200],
+                 "poster": f"https://image.tmdb.org/t/p/w342{x['poster_path']}" if x.get("poster_path") else None,
+                 "backdrop": f"https://image.tmdb.org/t/p/w780{x['backdrop_path']}" if x.get("backdrop_path") else None,
+                 "media_type": x.get("media_type","movie")}
+                for x in items if x.get("poster_path")]
+
+    def _fmt_series(items):
+        return [{"id": x.get("id"), "title": x.get("name") or x.get("title",""),
+                 "year": (x.get("first_air_date") or "")[:4],
+                 "rating": round(x.get("vote_average",0),1),
+                 "overview": (x.get("overview") or "")[:200],
+                 "poster": f"https://image.tmdb.org/t/p/w342{x['poster_path']}" if x.get("poster_path") else None,
+                 "backdrop": f"https://image.tmdb.org/t/p/w780{x['backdrop_path']}" if x.get("backdrop_path") else None}
+                for x in items if x.get("poster_path")]
+
+    data = {
+        "trending_all":    _fmt_movies(_fetch("/trending/all/week")),
+        "trending_movies": _fmt_movies(_fetch("/trending/movie/week")),
+        "trending_series": _fmt_series(_fetch("/trending/tv/week")),
+        "top_movies":      _fmt_movies(_fetch("/movie/top_rated", {"region":"NL"})),
+        "popular_movies":  _fmt_movies(_fetch("/movie/popular",   {"region":"NL"})),
+        "popular_series":  _fmt_series(_fetch("/tv/popular")),
+        "now_playing":     _fmt_movies(_fetch("/movie/now_playing",{"region":"NL"})),
+        "fetched_at":      datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    _tc[cache_key] = data
+    _stc()
+    return data
 
 # ── Jellyfin ──────────────────────────────────────────────────────
 def jf_refresh(cfg, is_film):
@@ -631,9 +704,9 @@ def _clean_remote_subpath(remote_subpath: str) -> str:
     return "/".join(cleaned)
 
 def storage_write_strm(remote_subpath: str, url: str, cfg: Dict,
-                       auto_postprocess: bool = True) -> str:
+                       auto_postprocess: bool = True,
+                       jellyfin_push: bool = True) -> str:
     mode    = storage_mode(cfg)
-    # is_film: check of het pad begint met de films subdir
     films_sub  = storage_subdir(cfg, "movies")
     series_sub = storage_subdir(cfg, "series")
     rp = remote_subpath.replace("\\", "/").lstrip("/")
@@ -661,6 +734,12 @@ def storage_write_strm(remote_subpath: str, url: str, cfg: Dict,
             try: tmp_path.unlink()
             except Exception: pass
         result = clean_subpath
+
+    # Jellyfin push na aanmaken .strm (in achtergrond, blokkeert niet)
+    if jellyfin_push:
+        try: jf_refresh(cfg, is_film)
+        except Exception as e: print(f"[!] Jellyfin push fout: {e}")
+
     return result
 
 # ── SMB ───────────────────────────────────────────────────────────
@@ -1087,9 +1166,36 @@ def index():
         return redirect(url_for("settings"))
     return redirect(url_for("browse"))
 
+@app.route("/settings/login", methods=["GET","POST"])
+def settings_login():
+    cfg = load_conf()
+    if not _settings_locked(cfg):
+        return redirect(url_for("settings"))
+    if _settings_authenticated():
+        return redirect(url_for("settings"))
+    error = None
+    if request.method == "POST":
+        pw   = request.form.get("password","")
+        stored = cfg.get("app",{}).get("settings_password","")
+        if _hash_pw(pw) == stored or pw == stored:  # vergelijk gehashed of plaintext
+            session["settings_auth"] = True
+            session.permanent = True
+            return redirect(url_for("settings"))
+        error = "Ongeldig wachtwoord."
+    return render_template("settings_login.html", error=error)
+
+@app.get("/settings/logout")
+def settings_logout():
+    session.pop("settings_auth", None)
+    return redirect(url_for("settings_login"))
+
 @app.route("/settings", methods=["GET","POST"])
 def settings():
     cfg = load_conf()
+    # Beveiliging check
+    auth_redirect = _require_settings_auth(cfg)
+    if auth_redirect: return auth_redirect
+
     if request.method == "POST":
         sec = request.form.get("section","")
         if sec == "xtream":
@@ -1154,8 +1260,30 @@ def settings():
                 "langs":    langs,
             })
             global _os_token; _os_token = None
+        elif sec == "app":
+            new_pw      = request.form.get("new_password","").strip()
+            confirm_pw  = request.form.get("confirm_password","").strip()
+            current_pw  = request.form.get("current_password","").strip()
+            stored_hash = cfg.get("app",{}).get("settings_password","")
+            # Verifieer huidig wachtwoord als er al een is ingesteld
+            if stored_hash and _hash_pw(current_pw) != stored_hash:
+                flash("Huidig wachtwoord klopt niet.","danger")
+                return redirect(url_for("settings"))
+            if new_pw:
+                if new_pw != confirm_pw:
+                    flash("Wachtwoorden komen niet overeen.","danger")
+                    return redirect(url_for("settings"))
+                cfg.setdefault("app",{})["settings_password"] = _hash_pw(new_pw)
+                flash("Wachtwoord ingesteld.","success")
+                session["settings_auth"] = True  # direct ingelogd na instellen
+            else:
+                # Leeg wachtwoord = beveiliging uitzetten
+                cfg.setdefault("app",{})["settings_password"] = ""
+                session.pop("settings_auth", None)
+                flash("Wachtwoordbeveiliging uitgeschakeld.","success")
         save_conf(cfg)
-        flash("Instellingen opgeslagen.","success")
+        if sec != "app":
+            flash("Instellingen opgeslagen.","success")
         return redirect(url_for("settings"))
 
     account_info = None
@@ -1163,7 +1291,8 @@ def settings():
     if x.get("server") and x.get("user") and x.get("pwd"):
         try: account_info = make_api(cfg).get_user_info()
         except Exception: pass
-    return render_template("settings.html", cfg=cfg, account_info=account_info)
+    return render_template("settings.html", cfg=cfg, account_info=account_info,
+                           settings_locked=_settings_locked(cfg))
 
 @app.get("/browse")
 def browse():
@@ -1310,11 +1439,14 @@ def api_strm_series():
                 try:
                     storage_write_strm(
                         f"{sub}/{sname}/{sname} S{sn:02d}E{en:02d}.strm",
-                        api.episode_url(eid, ext), cfg, auto_postprocess=False)
+                        api.episode_url(eid, ext), cfg, auto_postprocess=False, jellyfin_push=False)
                     created += 1
                 except Exception as ex: errors.append(str(ex))
         if storage_mode(cfg) == "mount":
             postprocess_series(cfg)
+        # Jellyfin eenmalig na alle afleveringen
+        try: jf_refresh(cfg, False)
+        except Exception: pass
         return jsonify({"ok":True,"count":created,"errors":errors,"path":f"{sub}/{sname}"})
     except Exception as e: return jsonify({"ok":False,"error":str(e)}),500
 
@@ -1340,7 +1472,7 @@ def api_strm_batch():
                 ext=pick_ext(it.get("container_extension"),cfg["ext"]["movie"] or "mp4")
                 url=api.vod_url(sid,ext)
                 sb=sanitize(f"{tmdb_id} - {sanitize(title_raw)}") if tmdb_id else sanitize(title_raw)
-                storage_write_strm(f"{movies_sub}/{sb}/{sb}.strm", url, cfg, auto_postprocess=False)
+                storage_write_strm(f"{movies_sub}/{sb}/{sb}.strm", url, cfg, auto_postprocess=False, jellyfin_push=False)
                 created+=1
             elif kind=="series":
                 data=api.get_series_info(sid)
@@ -1359,12 +1491,16 @@ def api_strm_batch():
                         ext=pick_ext(ep.get("container_extension") or cfg["ext"]["episode"],"mp4")
                         storage_write_strm(
                             f"{series_sub}/{sname}/{sname} S{sn:02d}E{en:02d}.strm",
-                            api.episode_url(eid,ext), cfg, auto_postprocess=False)
+                            api.episode_url(eid,ext), cfg, auto_postprocess=False, jellyfin_push=False)
                         created+=1
         except Exception as ex: errors.append(f"{sid}: {ex}")
     if storage_mode(cfg) == "mount" and created > 0:
         if kind=="movie": postprocess_movies(cfg)
         else:             postprocess_series(cfg)
+    # Jellyfin eenmalig na alle items
+    if created > 0:
+        try: jf_refresh(cfg, kind=="movie")
+        except Exception: pass
     return jsonify({"ok":True,"created":created,"errors":errors})
 
 @app.post("/api/library/refresh")
@@ -1396,7 +1532,24 @@ def api_postprocess():
     if scope in ("all","series"): res["series"]=postprocess_series(cfg)
     return jsonify({"ok":True,"results":res})
 
+
 # ── API: Tests ────────────────────────────────────────────────────
+@app.get("/discover")
+def discover():
+    return render_template("discover.html", cfg=load_conf())
+
+@app.get("/api/discover")
+def api_discover():
+    cfg = load_conf()
+    key = cfg.get("tmdb",{}).get("api_key","")
+    if not key:
+        return jsonify({"ok": False, "error": "Geen TMDB API key ingesteld. Voeg deze toe via Instellingen → TMDB."}), 400
+    try:
+        data = tmdb_discover(key)
+        return jsonify({"ok": True, "data": data})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
 @app.post("/api/test/xtream")
 def api_test_xtream():
     try:
@@ -1430,6 +1583,67 @@ def api_test_tmdb():
         if r.ok: return jsonify({"ok":True,"message":"TMDB verbinding geslaagd"})
         return jsonify({"ok":False,"error":f"HTTP {r.status_code} – ongeldige API key?"})
     except Exception as e: return jsonify({"ok":False,"error":str(e)})
+
+@app.get("/api/tmdb/discover")
+def api_tmdb_discover():
+    """Haal TMDB lijsten op: trending, popular, top_rated voor films en series."""
+    cfg  = load_conf()
+    key  = cfg.get("tmdb",{}).get("api_key","")
+    if not key:
+        return jsonify({"ok": False, "error": "Geen TMDB API key ingesteld.", "setup": True}), 400
+
+    kind      = request.args.get("kind", "movie")   # movie | tv
+    list_type = request.args.get("list", "trending")
+    page      = max(1, min(5, int(request.args.get("page", 1) or 1)))
+
+    # "upcoming" bestaat niet voor TV — gebruik "airing_today"
+    if kind == "tv" and list_type == "upcoming":
+        list_type = "airing_today"
+
+    cache_name = f"tmdb_{kind}_{list_type}_p{page}.json"
+    ttl = max(12, int(cfg["cache"]["ttl_hours"]))  # min 12 uur voor trending data
+
+    def _fetch():
+        if list_type == "trending":
+            url = f"https://api.themoviedb.org/3/trending/{kind}/week"
+        elif list_type in ("popular","top_rated","upcoming","now_playing","on_the_air","airing_today"):
+            url = f"https://api.themoviedb.org/3/{kind}/{list_type}"
+        else:
+            return {"items": [], "page": page, "total_pages": 1}
+
+        r = _requests.get(url, params={"api_key": key, "language": "nl-NL", "page": page}, timeout=8)
+        if not r.ok:
+            raise RuntimeError(f"TMDB fout: HTTP {r.status_code}")
+
+        data    = r.json()
+        results = data.get("results", [])
+        total   = data.get("total_pages", 1)
+
+        items = []
+        for item in results:
+            items.append({
+                "tmdb_id":  item.get("id"),
+                "title":    item.get("title") or item.get("name", ""),
+                "overview": (item.get("overview") or "")[:300],
+                "rating":   round(item.get("vote_average", 0), 1),
+                "votes":    item.get("vote_count", 0),
+                "year":     (item.get("release_date") or item.get("first_air_date", ""))[:4],
+                "poster":   ("https://image.tmdb.org/t/p/w342" + item["poster_path"])
+                            if item.get("poster_path") else None,
+                "backdrop": ("https://image.tmdb.org/t/p/w780" + item["backdrop_path"])
+                            if item.get("backdrop_path") else None,
+                "kind":     kind,
+            })
+        return {"items": items, "page": page, "total_pages": min(total, 5)}
+
+    try:
+        doc = _gor(cache_name, ttl, _fetch)
+        return jsonify({"ok": True, "items": doc.get("items", []),
+                        "page": doc.get("page", page),
+                        "total_pages": doc.get("total_pages", 1),
+                        "cached_at": doc.get("fetched_at")})
+    except Exception as ex:
+        return jsonify({"ok": False, "error": str(ex)}), 500
 
 @app.post("/api/test/opensubtitles")
 def api_test_opensubtitles():
