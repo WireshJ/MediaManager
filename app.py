@@ -363,68 +363,90 @@ def postprocess_series(cfg: Dict) -> dict:
     if not series_dir.exists():
         results["errors"].append(f"Map niet gevonden: {series_dir}"); return results
 
-    for folder in sorted(series_dir.iterdir()):
-        if not folder.is_dir(): continue
-        folder_name = folder.name
-        # Mapnaam: strip prefix/suffix maar bewaar de seriename
-        new_name   = safe_fn(strip_prefix(folder_name))
-        # Verwijder jaar en landcode uit mapnaam
-        new_name   = re.sub(r'\s*\(\d{4}\)', '', new_name).strip()
-        new_name   = re.sub(r'\s*\([A-Z]{2}\)$', '', new_name).strip()
-        new_name   = safe_fn(new_name) or folder_name
-        new_folder = series_dir / new_name
+    def _clean_folder_name(name: str) -> str:
+        """Strip prefix, jaar en landcode van een mapnaam."""
+        n = safe_fn(strip_prefix(name))
+        n = re.sub(r'\s*\(\d{4}\)', '', n).strip()
+        n = re.sub(r'\s*\([A-Z]{2}\)$', '', n).strip()
+        return safe_fn(n) or name
 
-        if folder != new_folder:
-            if new_folder.exists():
-                # Verplaats inhoud naar bestaande map ipv fout
-                try:
-                    for f in folder.iterdir():
-                        tgt = new_folder / f.name
-                        if not tgt.exists():
-                            f.rename(tgt)
-                    folder.rmdir()
-                    results["renamed"].append(f"{folder_name} → {new_name} (samengevoegd)")
-                except Exception as e:
-                    results["errors"].append(f"Samenvoegen {folder_name}: {e}")
-                folder = new_folder
-            else:
-                try:
-                    folder.rename(new_folder)
-                    results["renamed"].append(f"{folder_name} → {new_name}")
-                    folder = new_folder
-                except Exception as e:
-                    results["errors"].append(str(e)); continue
-        else:
-            results["skipped"].append(folder_name)
-
-        # Hernoem bestanden met volledige cleaning (_clean_strm_name)
-        serie_clean = folder.name  # schone seriename na map-rename
+    def _rename_files_in(folder: Path, serie_clean: str):
+        """Hernoem alle bestanden in een map naar schone namen."""
         for f in sorted(folder.iterdir()):
             if not f.is_file(): continue
             if f.suffix == ".strm":
-                # Gebruik _clean_strm_name voor volledige reiniging
                 cleaned = _clean_strm_name(f.name)
-                # Zorg dat bestandsnaam begint met seriename
-                ep_match = re.search(r'[Ss]\d{2}[Ee]\d{2,3}', cleaned)
+                ep_match = re.search(r'[Ss]\d{1,2}[Ee]\d{1,3}', cleaned)
                 if ep_match:
-                    ep_code = ep_match.group(0).upper()
+                    ep_code      = ep_match.group(0).upper()
                     cleaned_name = f"{serie_clean} {ep_code}.strm"
                 else:
                     cleaned_name = cleaned
             else:
-                # Subs en andere bestanden: alleen prefix cleaning
-                stem = f.stem; ext = f.suffix
-                cleaned_stem = safe_fn(strip_prefix(stem))
-                cleaned_stem = re.sub(r'\s*\(\d{4}\)', '', cleaned_stem).strip()
-                cleaned_stem = re.sub(r'\s*\([A-Za-z]{2}\)$', '', cleaned_stem).strip()
-                cleaned_name = safe_fn(cleaned_stem) + ext
+                # .mkv, .srt etc: strip prefix/jaar/landcode
+                stem = safe_fn(strip_prefix(f.stem))
+                stem = re.sub(r'\s*\(\d{4}\)', '', stem).strip()
+                stem = re.sub(r'\s*\([A-Za-z]{2}\)(\.|$)', r'\1', stem).strip()
+                cleaned_name = safe_fn(stem) + f.suffix
 
-            if cleaned_name != f.name:
+            if cleaned_name and cleaned_name != f.name:
                 tgt = folder / cleaned_name
                 if not tgt.exists():
-                    try:
-                        f.rename(tgt)
+                    try: f.rename(tgt)
                     except Exception: pass
+
+    # ── Stap 1: bereken doelmapnamen voor alle mappen ──────────────
+    # Doe dit vooraf zodat we weten welke mappen samengevoegd worden
+    plan: Dict[str, List[Path]] = {}  # doelnaam → lijst van bronmappen
+    for folder in sorted(series_dir.iterdir()):
+        if not folder.is_dir(): continue
+        new_name = _clean_folder_name(folder.name)
+        plan.setdefault(new_name, []).append(folder)
+
+    # ── Stap 2: uitvoeren ──────────────────────────────────────────
+    for new_name, folders in plan.items():
+        new_folder = series_dir / new_name
+
+        # Sorteer: map die al de juiste naam heeft komt eerst
+        folders.sort(key=lambda p: 0 if p.name == new_name else 1)
+
+        # Zorg dat de doelmap bestaat:
+        # - als een van de bronmappen al de juiste naam heeft → die is al de doelmap
+        # - anders → hernoem de eerste bronmap
+        if not new_folder.exists():
+            try:
+                folders[0].rename(new_folder)
+                results["renamed"].append(f"{folders[0].name} → {new_name}")
+                folders = folders[1:]
+            except Exception as e:
+                results["errors"].append(str(e)); continue
+        else:
+            # Doelmap bestaat al (had al de juiste naam) → skip die uit de lijst
+            folders = [f for f in folders if f != new_folder]
+
+        # Verplaats bestanden uit resterende bronmappen naar doelmap
+        for src_folder in folders:
+            if not src_folder.exists(): continue
+            try:
+                for f in list(src_folder.iterdir()):
+                    if not f.is_file(): continue
+                    tgt = new_folder / f.name
+                    if not tgt.exists():
+                        f.rename(tgt)
+                    else:
+                        # Duplicate: bewaar kortste (schonere) naam
+                        if len(f.name) < len(tgt.name):
+                            tgt.unlink(); f.rename(tgt)
+                        else:
+                            f.unlink()
+                src_folder.rmdir()
+                results["renamed"].append(f"{src_folder.name} → {new_name} (samengevoegd)")
+            except Exception as e:
+                results["errors"].append(f"Samenvoegen {src_folder.name}: {e}")
+
+        # Hernoem alle bestanden in de (nu volledige) doelmap
+        if new_folder.exists():
+            _rename_files_in(new_folder, new_name)
 
     return results
 
