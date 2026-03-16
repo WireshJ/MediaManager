@@ -1,0 +1,353 @@
+{% extends "base.html" %}
+{% block title %}Instellingen – MediaManager{% endblock %}
+{% block content %}
+
+<div class="page-header mb-4">
+  <h2 class="mb-0">⚙️ Instellingen</h2>
+</div>
+
+<div class="row g-4">
+
+  <!-- ══ XTREAM API ══════════════════════════════════════════════ -->
+  <div class="col-12">
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="d-flex align-items-center gap-2">
+          <span class="settings-icon">📡</span>
+          <div>
+            <h5 class="mb-0">Xtream API</h5>
+            <small class="text-muted">Verbinding met je IPTV provider</small>
+          </div>
+        </div>
+        {% if account_info %}
+        <div class="account-badge">
+          <span class="badge-dot {% if account_info.get('status','').lower() == 'active' %}active{% else %}inactive{% endif %}"></span>
+          {{ account_info.get('status','?') }}
+        </div>
+        {% endif %}
+      </div>
+
+      {% if account_info %}
+      <div class="account-info-bar mb-4">
+        <div class="ai-item">
+          <span class="ai-label">Status</span>
+          <span class="ai-value {% if account_info.get('status','').lower() == 'active' %}text-success{% else %}text-danger{% endif %}">
+            {{ account_info.get('status','–') }}
+          </span>
+        </div>
+        <div class="ai-item">
+          <span class="ai-label">Verloopt op</span>
+          <span class="ai-value">
+            {% if account_info.get('exp_date') %}
+              {% set ts = account_info.get('exp_date')|int %}
+              <span id="exp-date" data-ts="{{ ts }}">{{ ts }}</span>
+            {% else %}–{% endif %}
+          </span>
+        </div>
+        <div class="ai-item">
+          <span class="ai-label">Actieve verbindingen</span>
+          <span class="ai-value">{{ account_info.get('active_cons','0') }}</span>
+        </div>
+        <div class="ai-item">
+          <span class="ai-label">Max verbindingen</span>
+          <span class="ai-value">{{ account_info.get('max_connections','?') }}</span>
+        </div>
+        <div class="ai-item">
+          <span class="ai-label">Trial account</span>
+          <span class="ai-value">{{ 'Ja' if account_info.get('is_trial') == '1' else 'Nee' }}</span>
+        </div>
+      </div>
+      {% endif %}
+
+      <form method="POST">
+        <input type="hidden" name="section" value="xtream">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Server URL</label>
+            <input type="text" class="form-control" name="server"
+                   value="{{ cfg.xtream.server }}" placeholder="http://provider.com">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Poort</label>
+            <input type="number" class="form-control" name="port"
+                   value="{{ cfg.xtream.port if cfg.xtream.port else '' }}" placeholder="8080">
+            <small class="text-muted">Leeg laten als standaard</small>
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Gebruikersnaam</label>
+            <input type="text" class="form-control" name="user" value="{{ cfg.xtream.user }}">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Wachtwoord</label>
+            <input type="password" class="form-control" name="pwd" value="{{ cfg.xtream.pwd }}">
+          </div>
+          <div class="col-md-2">
+            <label class="form-label">Timeout (sec)</label>
+            <input type="number" class="form-control" name="timeout" value="{{ cfg.xtream.timeout }}" min="5" max="60">
+          </div>
+          <div class="col-md-2 d-flex align-items-end">
+            <div class="form-check mb-2">
+              <input class="form-check-input" type="checkbox" name="verify_tls" id="vtls"
+                     {% if cfg.xtream.verify_tls %}checked{% endif %}>
+              <label class="form-check-label" for="vtls">TLS verifiëren</label>
+            </div>
+          </div>
+          <div class="col-12 d-flex gap-2">
+            <button type="submit" class="btn btn-primary">💾 Opslaan</button>
+            <button type="button" class="btn btn-outline-secondary" onclick="testXtream()">🔌 Test verbinding</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ══ OUTPUT ════════════════════════════════════════════════ -->
+  <div class="col-12">
+    <div class="settings-card">
+      <div class="settings-card-header">
+        <div class="d-flex align-items-center gap-2">
+          <span class="settings-icon">📂</span>
+          <div>
+            <h5 class="mb-0">Output & Paden</h5>
+            <small class="text-muted">Waar worden .strm bestanden opgeslagen (gemounte map)</small>
+          </div>
+        </div>
+      </div>
+      <form method="POST">
+        <input type="hidden" name="section" value="output">
+        <div class="row g-3">
+          <div class="col-12">
+            <label class="form-label">Basis output map <span class="text-muted">(mount pad op server)</span></label>
+            <input type="text" class="form-control font-mono" name="base"
+                   value="{{ cfg.output.base }}" placeholder="/media/library">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">📺 Live submap</label>
+            <input type="text" class="form-control font-mono" name="live" value="{{ cfg.output.live }}">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">🎬 Films submap</label>
+            <input type="text" class="form-control font-mono" name="movies" value="{{ cfg.output.movies }}">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label">📺 Series submap</label>
+            <input type="text" class="form-control font-mono" name="series" value="{{ cfg.output.series }}">
+          </div>
+
+          <div class="col-12"><div class="settings-divider">Bestandsextensies</div></div>
+          <div class="col-md-3">
+            <label class="form-label">Live extensie</label>
+            <input type="text" class="form-control font-mono" name="ext_live"
+                   value="{{ cfg.ext.live or 'ts' }}" placeholder="ts">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Film extensie</label>
+            <input type="text" class="form-control font-mono" name="ext_movie"
+                   value="{{ cfg.ext.movie or '' }}" placeholder="automatisch">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Serie extensie</label>
+            <input type="text" class="form-control font-mono" name="ext_episode"
+                   value="{{ cfg.ext.episode or '' }}" placeholder="automatisch">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Cache TTL (uur)</label>
+            <input type="number" class="form-control" name="ttl_hours"
+                   value="{{ cfg.cache.ttl_hours }}" min="0" max="168">
+          </div>
+          <div class="col-12">
+            <button type="submit" class="btn btn-primary">💾 Opslaan</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ══ JELLYFIN ══════════════════════════════════════════════ -->
+  <div class="col-lg-6">
+    <div class="settings-card optional-card" id="jf-card">
+      <div class="settings-card-header">
+        <div class="d-flex align-items-center gap-2">
+          <span class="settings-icon">🪼</span>
+          <div>
+            <h5 class="mb-0">Jellyfin</h5>
+            <small class="text-muted">Automatisch library refresh na download</small>
+          </div>
+        </div>
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input toggle-switch" type="checkbox" id="jf-toggle"
+                 {% if cfg.jellyfin.enabled %}checked{% endif %}
+                 onchange="toggleSection('jf-fields', this.checked)">
+          <label class="form-check-label" for="jf-toggle">Ingeschakeld</label>
+        </div>
+      </div>
+      <form method="POST">
+        <input type="hidden" name="section" value="jellyfin">
+        <input type="hidden" name="jf_enabled" id="jf_enabled_hidden" value="{{ 'on' if cfg.jellyfin.enabled else '' }}">
+        <div id="jf-fields" class="{% if not cfg.jellyfin.enabled %}fields-disabled{% endif %}">
+          <div class="row g-3">
+            <div class="col-12">
+              <label class="form-label">Jellyfin URL</label>
+              <input type="text" class="form-control" name="jf_url"
+                     value="{{ cfg.jellyfin.url }}" placeholder="https://jellyfin.voorbeeld.nl">
+            </div>
+            <div class="col-12">
+              <label class="form-label">API Key</label>
+              <input type="password" class="form-control" name="jf_api_key" value="{{ cfg.jellyfin.api_key }}">
+            </div>
+            <div class="col-6">
+              <label class="form-label">Films Library ID</label>
+              <input type="text" class="form-control font-mono" name="jf_films_lib"
+                     value="{{ cfg.jellyfin.films_library_id }}" placeholder="optioneel">
+            </div>
+            <div class="col-6">
+              <label class="form-label">Series Library ID</label>
+              <input type="text" class="form-control font-mono" name="jf_series_lib"
+                     value="{{ cfg.jellyfin.series_library_id }}" placeholder="optioneel">
+            </div>
+            <div class="col-12 d-flex gap-2">
+              <button type="submit" class="btn btn-primary">💾 Opslaan</button>
+              <button type="button" class="btn btn-outline-secondary" onclick="testJellyfin()">🔌 Test</button>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ══ TMDB ══════════════════════════════════════════════════ -->
+  <div class="col-lg-6">
+    <div class="settings-card optional-card">
+      <div class="settings-card-header">
+        <div class="d-flex align-items-center gap-2">
+          <span class="settings-icon">🎭</span>
+          <div>
+            <h5 class="mb-0">TMDB</h5>
+            <small class="text-muted">Metadata, posters en hernoemen op basis van TMDB ID</small>
+          </div>
+        </div>
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input toggle-switch" type="checkbox" id="tmdb-toggle"
+                 {% if cfg.tmdb.enabled %}checked{% endif %}
+                 onchange="toggleSection('tmdb-fields', this.checked)">
+          <label class="form-check-label" for="tmdb-toggle">Ingeschakeld</label>
+        </div>
+      </div>
+      <form method="POST">
+        <input type="hidden" name="section" value="tmdb">
+        <input type="hidden" name="tmdb_enabled" id="tmdb_enabled_hidden" value="{{ 'on' if cfg.tmdb.enabled else '' }}">
+        <div id="tmdb-fields" class="{% if not cfg.tmdb.enabled %}fields-disabled{% endif %}">
+          <div class="row g-3">
+            <div class="col-12">
+              <label class="form-label">TMDB API Key (v3)</label>
+              <input type="password" class="form-control" name="tmdb_api_key" value="{{ cfg.tmdb.api_key }}">
+              <small class="text-muted">Aanmaken op <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org</a></small>
+            </div>
+            <div class="col-12">
+              <button type="submit" class="btn btn-primary">💾 Opslaan</button>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ══ OPENSUBTITLES ═════════════════════════════════════════ -->
+  <div class="col-12">
+    <div class="settings-card optional-card">
+      <div class="settings-card-header">
+        <div class="d-flex align-items-center gap-2">
+          <span class="settings-icon">💬</span>
+          <div>
+            <h5 class="mb-0">OpenSubtitles</h5>
+            <small class="text-muted">Automatisch ondertitels downloaden na verwerking</small>
+          </div>
+        </div>
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input toggle-switch" type="checkbox" id="os-toggle"
+                 {% if cfg.opensubtitles.enabled %}checked{% endif %}
+                 onchange="toggleSection('os-fields', this.checked)">
+          <label class="form-check-label" for="os-toggle">Ingeschakeld</label>
+        </div>
+      </div>
+      <form method="POST">
+        <input type="hidden" name="section" value="opensubtitles">
+        <input type="hidden" name="os_enabled" id="os_enabled_hidden" value="{{ 'on' if cfg.opensubtitles.enabled else '' }}">
+        <div id="os-fields" class="{% if not cfg.opensubtitles.enabled %}fields-disabled{% endif %}">
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">API Key</label>
+              <input type="password" class="form-control" name="os_api_key" value="{{ cfg.opensubtitles.api_key }}">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Gebruikersnaam</label>
+              <input type="text" class="form-control" name="os_username" value="{{ cfg.opensubtitles.username }}">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Wachtwoord</label>
+              <input type="password" class="form-control" name="os_password" value="{{ cfg.opensubtitles.password }}">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label">Talen <span class="text-muted">(komma gescheiden)</span></label>
+              <input type="text" class="form-control font-mono" name="os_langs"
+                     value="{{ cfg.opensubtitles.langs | join(',') }}" placeholder="nl,en">
+            </div>
+            <div class="col-12">
+              <button type="submit" class="btn btn-primary">💾 Opslaan</button>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+</div><!-- /row -->
+
+{% endblock %}
+{% block scripts %}
+<script>
+function toggleSection(fieldId, enabled) {
+  const fields = document.getElementById(fieldId);
+  if (!fields) return;
+  fields.classList.toggle('fields-disabled', !enabled);
+  // Sync hidden field
+  const hiddenMap = {
+    'jf-fields':   'jf_enabled_hidden',
+    'tmdb-fields': 'tmdb_enabled_hidden',
+    'os-fields':   'os_enabled_hidden',
+  };
+  const hid = document.getElementById(hiddenMap[fieldId]);
+  if (hid) hid.value = enabled ? 'on' : '';
+}
+
+async function testXtream() {
+  showToast('⏳ Verbinding testen...','info');
+  try {
+    const d = await fetch('/api/test/xtream',{method:'POST'}).then(r=>r.json());
+    if (d.ok) showToast('✅ Xtream verbinding OK','success');
+    else showToast('❌ Fout: '+d.error,'error');
+  } catch(e) { showToast('❌ Verzoek mislukt','error'); }
+}
+
+async function testJellyfin() {
+  showToast('⏳ Jellyfin testen...','info');
+  try {
+    const d = await fetch('/api/test/jellyfin',{method:'POST'}).then(r=>r.json());
+    if (d.ok) showToast(`✅ Jellyfin OK (v${d.version})`,'success');
+    else showToast('❌ Fout: '+d.error,'error');
+  } catch(e) { showToast('❌ Verzoek mislukt','error'); }
+}
+
+// Zet datum van unix timestamp om
+document.addEventListener('DOMContentLoaded', () => {
+  const el = document.getElementById('exp-date');
+  if (el) {
+    const ts = parseInt(el.dataset.ts);
+    if (ts > 0) {
+      const d = new Date(ts * 1000);
+      el.textContent = d.toLocaleDateString('nl-NL', {day:'2-digit',month:'2-digit',year:'numeric'});
+    }
+  }
+});
+</script>
+{% endblock %}
