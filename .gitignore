@@ -1,7 +1,16 @@
-# Data map (config, cache, downloads)
+# ── Data map (config, cache, secrets, downloads) ──────────────────
 data/
 
-# Python
+# ── Claude Code ───────────────────────────────────────────────────
+.claude/
+
+# ── Environment & secrets ─────────────────────────────────────────
+.env
+.env.*
+*.env
+.secret_key
+
+# ── Python ────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
@@ -12,17 +21,17 @@ dist/
 build/
 .eggs/
 
-# Virtual environments
+# ── Virtual environments ──────────────────────────────────────────
 venv/
 .venv/
 env/
 
-# IDE
+# ── IDE ───────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 *.swo
 
-# OS
+# ── OS ────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db

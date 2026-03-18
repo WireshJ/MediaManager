@@ -4,6 +4,14 @@
 
 <div class="d-flex align-items-center justify-content-between mb-4">
   <h2 class="mb-0">⏳ Download Queue</h2>
+  <div id="storage-content" style="text-align:center;min-width:110px">
+    <span class="text-muted small">Laden…</span>
+  </div>
+</div>
+
+<!-- ── Ruimte waarschuwing ── -->
+<div id="space-warning" class="alert alert-warning mb-3" style="display:none" role="alert">
+  ⚠️ <span id="space-warning-text"></span>
 </div>
 
 <!-- ── Actieve download ── -->
@@ -49,6 +57,86 @@ function fmt(iso) {
   try { return new Date(iso).toLocaleString("nl-NL"); } catch { return iso; }
 }
 
+// ── Opslag ────────────────────────────────────────────────────
+let storageInfo = null;
+const GAUGE_ARC = 188.5; // π * r (r=60)
+
+function parseBytes(str) {
+  if (!str) return null;
+  const m = str.match(/([\d.]+)\s*(TiB|GiB|MiB|KiB|TB|GB|MB|KB)/i);
+  if (!m) return null;
+  const val = parseFloat(m[1]);
+  const map = { KIB:1024, MIB:1024**2, GIB:1024**3, TIB:1024**4,
+                KB:1000,  MB:1000**2,  GB:1000**3,  TB:1000**4 };
+  return val * (map[m[2].toUpperCase()] || 1);
+}
+
+function fmtBytes(b) {
+  if (b == null) return '?';
+  const units = ['B','KB','MB','GB','TB'];
+  let i = 0;
+  while (b >= 1024 && i < units.length - 1) { b /= 1024; i++; }
+  return `${b.toFixed(1)} ${units[i]}`;
+}
+
+function gaugeColor(pct) {
+  return pct > 90 ? '#ef5350' : pct > 75 ? '#ffa726' : '#66bb6a';
+}
+
+function renderStorageGauge(free, total) {
+  const used  = total - free;
+  const pct   = Math.round(used / total * 100);
+  const arc   = 150.8; // π * 48
+  const fill  = (pct / 100) * arc;
+  const color = gaugeColor(pct);
+  return `
+    <svg viewBox="0 0 120 68" width="108" height="61" style="overflow:visible;display:block;margin:0 auto">
+      <path d="M 12,62 A 48,48 0 0 1 108,62"
+            fill="none" stroke="#2a2a2a" stroke-width="11" stroke-linecap="round"/>
+      <path d="M 12,62 A 48,48 0 0 1 108,62"
+            fill="none" stroke="${color}" stroke-width="11" stroke-linecap="round"
+            stroke-dasharray="${arc}" stroke-dashoffset="${arc - fill}"
+            style="transition:stroke-dashoffset .6s ease,stroke .4s"/>
+      <text x="60" y="50" text-anchor="middle" font-size="15" font-weight="bold"
+            fill="${color}" font-family="inherit">${pct}%</text>
+      <text x="60" y="63" text-anchor="middle" font-size="7.5" fill="#777"
+            font-family="inherit">gebruikt</text>
+    </svg>
+    <div style="font-size:.72rem;color:#888;margin-top:2px;white-space:nowrap">
+      <strong style="color:#ccc">${fmtBytes(free)}</strong> vrij · ${fmtBytes(total)}
+    </div>`;
+}
+
+async function fetchStorage() {
+  try {
+    const d = await fetch('/api/storage/info').then(r => r.json());
+    storageInfo = d;
+    const el = document.getElementById('storage-content');
+    if (d.disabled) {
+      el.innerHTML = '';
+    } else if (d.supported && d.free != null) {
+      el.innerHTML = renderStorageGauge(d.free, d.total);
+    } else {
+      el.innerHTML = `<span class="text-muted small">${d.message || 'Schijfruimte niet beschikbaar.'}</span>`;
+    }
+  } catch(e) { console.error('Storage info fout:', e); }
+}
+
+function checkSpaceWarning(cur) {
+  const warn     = document.getElementById('space-warning');
+  const warnText = document.getElementById('space-warning-text');
+  if (!storageInfo || !storageInfo.supported) { warn.style.display = 'none'; return; }
+  if (!cur || !cur.total_size) { warn.style.display = 'none'; return; }
+  const needed = parseBytes(cur.total_size);
+  if (needed == null) { warn.style.display = 'none'; return; }
+  if (needed > storageInfo.free) {
+    warnText.textContent = `Onvoldoende schijfruimte! Download vereist ~${cur.total_size}, beschikbaar: ${fmtBytes(storageInfo.free)}.`;
+    warn.style.display = 'block';
+  } else {
+    warn.style.display = 'none';
+  }
+}
+
 // ── Actief ────────────────────────────────────────────────────
 function renderActive(cur) {
   const el=document.getElementById("active-wrap");
@@ -59,13 +147,19 @@ function renderActive(cur) {
   const pulse=pct<100&&isDown?"bar-pulse":"";
   el.innerHTML=`
     <div class="active-card">
-      <div class="active-status">${statusIcon(cur.status)} ${cur.status}</div>
-      <div class="active-name">${cur.name}</div>
+      <div class="d-flex align-items-start justify-content-between gap-2">
+        <div style="flex:1;min-width:0">
+          <div class="active-status">${statusIcon(cur.status)} ${cur.status}</div>
+          <div class="active-name">${cur.name}</div>
+        </div>
+        <button class="btn btn-outline-danger btn-sm" onclick="cancelDownload()" title="Download annuleren" style="white-space:nowrap">✖ Annuleer</button>
+      </div>
       <div class="progress-wrap">
         <div class="progress-fill ${pulse}" style="width:${pct}%;background:${barColor}"></div>
       </div>
       <div class="progress-meta">
         ${pct>0?`<span>${pct}%</span>`:''}
+        ${cur.total_size?`<span>📦 ${cur.total_size}</span>`:''}
         ${cur.speed?`<span>⚡ ${cur.speed}</span>`:''}
         ${cur.eta?`<span>ETA: ${cur.eta}</span>`:''}
         ${cur.attempt>1?`<span class="text-muted">poging ${cur.attempt}</span>`:''}
@@ -97,22 +191,23 @@ function renderHist(hist) {
   badge.textContent=hist.length; badge.style.display='inline'; clr.style.display='inline';
   el.innerHTML=hist.map(it=>{
     const ok=it.status==="done";
+    const retryable=it.status==="failed"||it.status==="cancelled";
     return `
       <div class="h-item ${it.status}">
-        <span class="q-icon">${ok?'✅':'❌'}</span>
+        <span class="q-icon">${statusIcon(it.status)}</span>
         <div style="flex:1;min-width:0">
           <div class="q-name">${it.name}</div>
           ${it.error?`<div class="h-error">${it.error}</div>`:''}
         </div>
         <span class="q-meta">${fmt(it.finished_at)}</span>
-        ${!ok?`<button class="btn-icon btn-retry" onclick="retryItem('${it.id}')" title="Opnieuw">🔁</button>`:''}
+        ${retryable?`<button class="btn-icon btn-retry" onclick="retryItem('${it.id}')" title="Opnieuw">🔁</button>`:''}
         <button class="btn-icon btn-del" onclick="delItem('${it.id}')" title="Verwijder">🗑</button>
       </div>`;
   }).join('');
 }
 
 function statusIcon(s) {
-  const m={"queued":"🕐","downloading":"⬇️","uploading":"⬆️","done":"✅","failed":"❌"};
+  const m={"queued":"🕐","downloading":"⬇️","uploading":"⬆️","done":"✅","failed":"❌","cancelled":"🚫"};
   return m[s]||"⏳";
 }
 
@@ -123,6 +218,7 @@ async function poll() {
     renderActive(d.current);
     renderQueue(d.queue);
     renderHist(d.history);
+    checkSpaceWarning(d.current);
   } catch(e){ console.error('Poll fout:',e); }
 }
 async function delItem(id) {
@@ -131,6 +227,10 @@ async function delItem(id) {
 async function retryItem(id) {
   await fetch(`/api/queue/retry/${id}`,{method:'POST'}); poll();
 }
+async function cancelDownload() {
+  if(!confirm('Wil je de actieve download annuleren?')) return;
+  await fetch('/api/queue/cancel',{method:'POST'}); poll();
+}
 async function clearHist() {
   if(!confirm('Wil je de volledige geschiedenis wissen?')) return;
   await fetch('/api/queue/history',{method:'DELETE'}); poll();
@@ -138,5 +238,7 @@ async function clearHist() {
 
 poll();
 setInterval(poll, 2000);
+fetchStorage();
+setInterval(fetchStorage, 30000);
 </script>
 {% endblock %}

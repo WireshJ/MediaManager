@@ -1,69 +1,85 @@
-# MediaManager
+# 🎬 M3U Studio
 
-Gecombineerde applicatie van **m3udownloader** + **xstream-studio** voor het beheren van IPTV content via Xtream Codes API.
+Een selfhosted webapplicatie voor het beheren van IPTV content via de Xtream Codes API.
+Download films en series rechtstreeks naar je NAS, met automatische Jellyfin integratie.
 
-## Functies
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
+![Flask](https://img.shields.io/badge/Flask-3.0-000000?logo=flask)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
 
-- **Browse** — Zoek en maak `.strm` bestanden via Xtream API (Live, Films, Series)
-- **Discover** — Trending, populaire en binnenkort verschijnende titels via TMDB, direct doorzoekbaar in je IPTV provider
-- **Bibliotheek** — Bekijk alle films en series op je media share, voeg toe aan download queue
-- **Queue** — Download bestanden via yt-dlp met voortgangsbalk en retry
-- **Postprocessing** — Automatisch hernoemen op TMDB ID en prefix/suffix cleaning
+---
+
+## ✨ Functies
+
+| Pagina | Beschrijving |
+|--------|-------------|
+| 📺 **Browse** | Zoek en maak `.strm` bestanden via Xtream API (Live, Films, Series) |
+| 🔍 **Discover** | Trending en populaire titels via TMDB, doorzoekbaar in je IPTV provider |
+| 📚 **Bibliotheek** | Bekijk alle content op je media share, voeg toe aan de download queue |
+| ⏳ **Queue** | Download via yt-dlp met voortgangsbalk, retry en schijfruimte indicator |
+| ⚙️ **Instellingen** | Beheer opslag, integraties en beveiliging |
+
+### 🔧 Onder de motorkap
+- **Postprocessing** — Automatisch hernoemen op TMDB ID met prefix/suffix cleaning
 - **Samenvoegen** — Dubbele serie-mappen worden automatisch samengevoegd
 - **Jellyfin push** — Automatische library scan na aanmaken `.strm` of voltooide download
-- **Beveiliging** — Optioneel wachtwoord voor toegang tot de instellingen
+- **Ondertitels** — Automatisch downloaden via OpenSubtitles na een download
+- **Beveiliging** — Optioneel wachtwoord (SHA-256) voor toegang tot de instellingen
 
-## Vereisten
+---
+
+## 📋 Vereisten
 
 - Python 3.11+
-- yt-dlp
+- `smbclient` (optioneel, voor schijfruimte weergave bij SMB mode)
 
-## Installatie
+---
+
+## 🚀 Installatie
 
 ```bash
-# 1. Installeer yt-dlp systeembreed
-pip install yt-dlp --break-system-packages
+# 1. Clone de repository
+git clone https://github.com/WireshJ/M3Ustudio.git
+cd M3Ustudio
 
-# 2. Installeer Python dependencies
+# 2. Installeer dependencies
 pip install -r requirements.txt --break-system-packages
-```
 
-## Handmatig starten
-
-```bash
+# 3. Start de app
 python app.py
 ```
 
-Met aangepaste poort of data map:
+Open vervolgens `http://localhost:8080` in je browser.
+
+### Aangepaste poort of data map
 
 ```bash
-DATA_DIR=/opt/mediamanager/data PORT=8080 python app.py
+DATA_DIR=/opt/m3ustudio/data PORT=8080 python app.py
 ```
 
 ---
 
-## Automatisch starten als Linux service (systemd)
+## 🖥️ Installeren als Linux service (systemd)
 
-### 1. Maak een service bestand aan
+### 1. Maak het service bestand aan
 
 ```bash
-nano /etc/systemd/system/mediamanager.service
+nano /etc/systemd/system/m3ustudio.service
 ```
-
-Plak de volgende inhoud en pas de paden aan:
 
 ```ini
 [Unit]
-Description=MediaManager IPTV
+Description=M3U Studio
 After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/mediamanager
-Environment=DATA_DIR=/opt/mediamanager/data
+WorkingDirectory=/opt/m3ustudio
+Environment=DATA_DIR=/opt/m3ustudio/data
 Environment=PORT=8080
-ExecStart=/usr/bin/python3 /opt/mediamanager/app.py
+ExecStart=/usr/bin/python3 /opt/m3ustudio/app.py
 Restart=on-failure
 RestartSec=10
 
@@ -73,109 +89,96 @@ WantedBy=multi-user.target
 
 > Gebruik `which python3` om het juiste Python pad te vinden.
 
-### 2. Activeer en start de service
+### 2. Activeer en start
 
 ```bash
 systemctl daemon-reload
-systemctl enable mediamanager
-systemctl start mediamanager
-systemctl status mediamanager
+systemctl enable m3ustudio
+systemctl start m3ustudio
+systemctl status m3ustudio
 ```
 
 ### 3. Logs bekijken
 
 ```bash
-journalctl -u mediamanager -f        # live
-journalctl -u mediamanager -n 100    # laatste 100 regels
-```
-
-### 4. Service beheren
-
-```bash
-systemctl stop mediamanager      # stoppen
-systemctl restart mediamanager   # herstarten
-systemctl disable mediamanager   # niet meer automatisch starten
+journalctl -u m3ustudio -f        # live
+journalctl -u m3ustudio -n 100    # laatste 100 regels
 ```
 
 ---
 
-## Storage Modes
+## 💾 Storage modes
 
-In Instellingen → Storage & Paden kies je één van drie modes:
+Stel je opslaglocatie in via **Instellingen → Storage & Paden**:
 
 | Mode | Wanneer gebruiken |
 |------|-------------------|
-| **Mount** | Server heeft directe toegang tot de media map (bijv. `/mnt/media`) |
-| **SMB** | App draait in een LXC container zonder mount rechten |
-| **FTP** | Universeel alternatief als SMB niet beschikbaar is |
+| 📁 **Mount** | Server heeft directe toegang tot de media map (bijv. `/mnt/media`) |
+| 🌐 **SMB** | App draait in een LXC container zonder mount rechten |
+| 📡 **FTP** | Universeel alternatief als SMB niet beschikbaar is |
 
 ### SMB instellen (aanbevolen voor LXC containers)
 
-- **Host**: IP van je NAS (bijv. `192.168.1.203`)
-- **Share**: naam van de share (bijv. `media`)
-- **Gebruikersnaam / Wachtwoord**: NAS credentials
-- **Films pad / Series pad**: submappen op de share (bijv. `Films`, `Series`)
+| Veld | Voorbeeld |
+|------|-----------|
+| Host | `192.168.1.100` |
+| Share | `media` |
+| Films pad | `Films` |
+| Series pad | `Series` |
 
-## Output structuur
+---
+
+## 🔌 Optionele integraties
+
+| Service | Functie | Vereist |
+|---------|---------|---------|
+| 🎞️ **Jellyfin** | Automatische library scan | URL + API key |
+| 🎭 **TMDB** | Metadata, posters, Discover pagina | Gratis API key |
+| 💬 **OpenSubtitles** | Automatisch ondertitels downloaden | Account + API key |
+
+- **TMDB API key** — Gratis aan te vragen op [themoviedb.org](https://www.themoviedb.org/settings/api)
+- **Jellyfin API key** — Te vinden in Jellyfin → Dashboard → API Keys
+
+---
+
+## 📁 Output structuur
 
 ```
 /mnt/media/
 ├── Live/
 │   └── Canvas.strm
 ├── Films/
-│   └── The Dark Knight/
-│       └── The Dark Knight.mkv
+│   └── The Dark Knight (2008)/
+│       └── The Dark Knight (2008).mkv
 └── Series/
     └── Breaking Bad/
-        ├── Breaking Bad S01E01.mkv
-        └── Breaking Bad S01E01.nl.srt
+        ├── Season 1/
+        │   ├── Breaking Bad S01E01.mkv
+        │   └── Breaking Bad S01E01.nl.srt
 ```
 
-Na een succesvolle download wordt het `.strm` bestand automatisch verwijderd.
-
 ---
 
-## Beveiliging
+## 🔐 Beveiliging
 
-De instellingenpagina kan beveiligd worden met een wachtwoord. Dit stel je in onderaan de instellingenpagina bij **Beveiliging**.
-
+- Wachtwoord instellen via **Instellingen → Beveiliging**
 - Wachtwoord leeg laten = geen beveiliging
-- Na instellen wordt het wachtwoord gevraagd bij elke sessie
 - Wachtwoord wordt opgeslagen als SHA-256 hash
-- Uitloggen via de knop op de instellingenpagina
+- De Flask sessie sleutel wordt automatisch gegenereerd en opgeslagen in `data/.secret_key`
+- Voor productie kun je ook `APP_SECRET` als omgevingsvariabele instellen
 
 ---
 
-## Optionele integraties
-
-| Service | Functie |
-|---------|---------|
-| **Jellyfin** | Automatisch library scan na aanmaken `.strm` of voltooide download |
-| **TMDB** | Metadata, posters, hernoemen op TMDB ID en de Discover pagina |
-| **OpenSubtitles** | Automatisch ondertitels downloaden na een download |
-
-### Jellyfin instellen
-
-- **URL**: bijv. `https://jelly.voorbeeld.nl`
-- **API key**: te vinden in Jellyfin → Dashboard → API Keys
-- **Films library ID** / **Series library ID**: optioneel, voor gerichte scans per library. Te vinden in de URL als je een library opent in Jellyfin.
-
-### TMDB instellen
-
-Een gratis API key aanvragen op [themoviedb.org](https://www.themoviedb.org/settings/api). Vereist voor de Discover pagina en automatisch hernoemen van films.
-
----
-
-## Omgevingsvariabelen
+## 🌍 Omgevingsvariabelen
 
 | Variabele | Standaard | Omschrijving |
 |-----------|-----------|--------------|
 | `DATA_DIR` | `./data` | Map voor config, cache en tijdelijke bestanden |
 | `PORT` | `8080` | Poort waarop de app luistert |
-| `APP_SECRET` | *(intern)* | Flask sessie sleutel, stel in voor productie |
+| `APP_SECRET` | *(automatisch)* | Flask sessie sleutel — wordt automatisch aangemaakt in `data/.secret_key` als niet ingesteld |
 
-Voor productiegebruik altijd een eigen `APP_SECRET` instellen:
+---
 
-```bash
-Environment=APP_SECRET=jouw-eigen-geheime-sleutel
-```
+## 📦 Versie
+
+Zie [Releases](https://github.com/WireshJ/M3Ustudio/releases) voor de changelog.
