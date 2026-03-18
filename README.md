@@ -6,7 +6,7 @@ Download films en series rechtstreeks naar je NAS, met automatische Jellyfin int
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![Flask](https://img.shields.io/badge/Flask-3.0-000000?logo=flask)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.0.1-blue)
 
 ---
 
@@ -21,8 +21,8 @@ Download films en series rechtstreeks naar je NAS, met automatische Jellyfin int
 | ⚙️ **Instellingen** | Beheer opslag, integraties en beveiliging |
 
 ### 🔧 Onder de motorkap
-- **Postprocessing** — Automatisch hernoemen op TMDB ID met prefix/suffix cleaning
-- **Samenvoegen** — Dubbele serie-mappen worden automatisch samengevoegd
+- **TMDB naamgeving** — Films en series krijgen bij toevoegen direct de officiële TMDB naam (`"Breaking Bad"`, `"The Dark Knight"`). Fallback op providernaam als TMDB uitstaat
+- **Postprocessing** — Prefix/suffix cleaning en automatisch samenvoegen van dubbele serie-mappen
 - **Jellyfin push** — Automatische library scan na aanmaken `.strm` of voltooide download
 - **Ondertitels** — Automatisch downloaden via OpenSubtitles na een download
 - **Beveiliging** — Optioneel wachtwoord (SHA-256) voor toegang tot de instellingen

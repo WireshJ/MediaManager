@@ -46,7 +46,10 @@
           </a>
         </li>
       </ul>
-      <ul class="navbar-nav ms-auto">
+      <ul class="navbar-nav ms-auto align-items-center gap-2">
+        <li class="nav-item">
+          <span class="text-white small opacity-50">v{{ app_version }}</span>
+        </li>
         <li class="nav-item">
           <a class="nav-link {% if request.endpoint == 'settings' %}active{% endif %}"
              href="{{ url_for('settings') }}">

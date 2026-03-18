@@ -6,7 +6,7 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, f
 from pathlib import Path
 import requests as _requests
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 app = Flask(__name__)
 
@@ -22,6 +22,11 @@ def _load_secret_key() -> str:
     return key
 
 app.config["SECRET_KEY"] = _load_secret_key()
+
+# ── Jinja2 globals ────────────────────────────────────────────────
+@app.context_processor
+def inject_globals():
+    return {"app_version": __version__}
 
 # ── Jinja2 filters ────────────────────────────────────────────────
 app.jinja_env.filters['basename'] = lambda p: Path(p).name
@@ -339,6 +344,17 @@ def tmdb_by_id(tmdb_id, key):
             d=r.json()
             return {"title":d.get("original_title") or d.get("title"),
                     "year":(d.get("release_date") or "")[:4]}
+    except Exception: pass
+    return None
+
+def tmdb_series_by_id(tmdb_id, key):
+    if not key or not tmdb_id: return None
+    try:
+        r = _requests.get(f"https://api.themoviedb.org/3/tv/{tmdb_id}",
+                          params={"api_key":key,"language":"en-US"},timeout=8)
+        if r.ok:
+            d=r.json()
+            return {"title":d.get("original_name") or d.get("name")}
     except Exception: pass
     return None
 
@@ -1502,7 +1518,9 @@ def api_strm_movie():
     if not title_raw: title_raw=p.get("title") or f"Movie {sid}"
     ext=pick_ext(p.get("ext"), cfg["ext"]["movie"] or "mp4")
     url=make_api(cfg).vod_url(sid, ext)
-    sb=sanitize(f"{tmdb_id} - {sanitize(title_raw)}") if tmdb_id else sanitize(title_raw)
+    tmdb_key = cfg["tmdb"]["api_key"] if cfg["tmdb"].get("enabled") else ""
+    tmdb_info = tmdb_by_id(tmdb_id, tmdb_key) if tmdb_id and tmdb_key else None
+    sb = safe_fn(tmdb_info["title"]) if tmdb_info and tmdb_info.get("title") else sanitize(strip_prefix(title_raw))
     sub=storage_subdir(cfg,"movies")
     try:
         path=storage_write_strm(f"{sub}/{sb}/{sb}.strm", url, cfg)
@@ -1516,8 +1534,20 @@ def api_strm_series():
     sub=storage_subdir(cfg,"series")
     try:
         api  = make_api(cfg); data=api.get_series_info(sid)
-        sname=sanitize((data.get("info") or {}).get("name") or
-                       (data.get("info") or {}).get("title") or f"Series {sid}")
+        sinfo= data.get("info") or {}
+        stmdb= (sinfo.get("tmdb_id") or sinfo.get("tmdb") or "").strip()
+        if not stmdb:
+            sc = _cf("series.json")
+            if sc.exists():
+                try:
+                    for it in (json.loads(sc.read_text()).get("items") or []):
+                        if str(it.get("series_id"))==str(sid):
+                            stmdb=(it.get("tmdb") or "").strip(); break
+                except Exception: pass
+        tmdb_key = cfg["tmdb"]["api_key"] if cfg["tmdb"].get("enabled") else ""
+        tmdb_info = tmdb_series_by_id(stmdb, tmdb_key) if stmdb and tmdb_key else None
+        sname = safe_fn(tmdb_info["title"]) if tmdb_info and tmdb_info.get("title") \
+                else sanitize(strip_prefix(sinfo.get("name") or sinfo.get("title") or f"Series {sid}"))
         eps  = data.get("episodes") or {}
         if not eps: return jsonify({"ok":False,"error":"Geen afleveringen"}),404
         created=0; errors=[]
@@ -1557,6 +1587,7 @@ def api_strm_batch():
             for it in (json.loads(cf.read_text()).get("items") or []):
                 movie_cache[str(it.get("stream_id"))]=it
         except Exception: pass
+    tmdb_key = cfg["tmdb"]["api_key"] if cfg["tmdb"].get("enabled") else ""
     for sid in ids:
         try:
             sid=str(sid)
@@ -1565,13 +1596,23 @@ def api_strm_batch():
                 tmdb_id=(it.get("tmdb") or "").strip()
                 ext=pick_ext(it.get("container_extension"),cfg["ext"]["movie"] or "mp4")
                 url=api.vod_url(sid,ext)
-                sb=sanitize(f"{tmdb_id} - {sanitize(title_raw)}") if tmdb_id else sanitize(title_raw)
+                tmdb_info = tmdb_by_id(tmdb_id, tmdb_key) if tmdb_id and tmdb_key else None
+                sb = safe_fn(tmdb_info["title"]) if tmdb_info and tmdb_info.get("title") \
+                     else sanitize(strip_prefix(title_raw))
                 storage_write_strm(f"{movies_sub}/{sb}/{sb}.strm", url, cfg, auto_postprocess=False, jellyfin_push=False)
                 created+=1
             elif kind=="series":
                 data=api.get_series_info(sid)
-                sname=sanitize((data.get("info") or {}).get("name") or
-                               (data.get("info") or {}).get("title") or f"Series {sid}")
+                sinfo=(data.get("info") or {})
+                stmdb=(sinfo.get("tmdb_id") or sinfo.get("tmdb") or "").strip()
+                if not stmdb:
+                    for it in (json.loads(_cf("series.json").read_text()).get("items") or []) \
+                              if _cf("series.json").exists() else []:
+                        if str(it.get("series_id"))==str(sid):
+                            stmdb=(it.get("tmdb") or "").strip(); break
+                tmdb_sinfo = tmdb_series_by_id(stmdb, tmdb_key) if stmdb and tmdb_key else None
+                sname = safe_fn(tmdb_sinfo["title"]) if tmdb_sinfo and tmdb_sinfo.get("title") \
+                        else sanitize(strip_prefix(sinfo.get("name") or sinfo.get("title") or f"Series {sid}"))
                 eps=data.get("episodes") or {}
                 if not eps: errors.append(f"Geen afleveringen voor {sid}"); continue
                 for sk,eplist in sorted(eps.items(),key=lambda kv:int(kv[0]) if str(kv[0]).isdigit() else 0):
