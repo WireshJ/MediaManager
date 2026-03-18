@@ -6,8 +6,22 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, f
 from pathlib import Path
 import requests as _requests
 
+__version__ = "1.0.0"
+
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.environ.get("APP_SECRET", "mediamanager-secret-2026")
+
+def _load_secret_key() -> str:
+    if key := os.environ.get("APP_SECRET"):
+        return key
+    secret_file = Path(os.environ.get("DATA_DIR", Path(__file__).parent / "data")) / ".secret_key"
+    secret_file.parent.mkdir(parents=True, exist_ok=True)
+    if secret_file.exists():
+        return secret_file.read_text().strip()
+    key = secrets.token_hex(32)
+    secret_file.write_text(key)
+    return key
+
+app.config["SECRET_KEY"] = _load_secret_key()
 
 # ── Jinja2 filters ────────────────────────────────────────────────
 app.jinja_env.filters['basename'] = lambda p: Path(p).name
@@ -107,6 +121,7 @@ DEFAULT_CONF: Dict[str, Any] = {
     "cache":   {"ttl_hours":6},
     "storage": {
         "mode": "mount",
+        "show_gauge": True,
         "smb":  {"host":"","share":"","user":"","password":"","domain":"","films_path":"Films","series_path":"Series"},
         "ftp":  {"host":"","port":21,"user":"","password":"","films_path":"/media/Films","series_path":"/media/Series"},
     },
@@ -907,6 +922,56 @@ def ftp_test(cfg: Dict) -> dict:
     except Exception as e:
         return {"ok":False,"error":str(e)}
 
+def storage_free_space(cfg: Dict) -> Optional[Dict]:
+    """Geeft {"free": bytes, "total": bytes} terug, of None als niet beschikbaar."""
+    mode = storage_mode(cfg)
+    if mode == "mount":
+        base = Path(cfg["output"]["base"])
+        try:
+            if not base.exists():
+                base = Path("/")
+            u = shutil.disk_usage(base)
+            return {"free": u.free, "total": u.total}
+        except Exception:
+            return None
+    elif mode == "smb":
+        s = _smb_cfg(cfg)
+        if not s.get("host") or not s.get("share"):
+            return None
+        if not shutil.which("smbclient"):
+            return None
+        cred_file = None
+        try:
+            # Credentials bestand voorkomt problemen met speciale tekens in wachtwoord
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.cred',
+                                             dir=DATA_DIR, delete=False) as tf:
+                tf.write(f"username={s.get('user','')}\n")
+                tf.write(f"password={s.get('password','')}\n")
+                if s.get("domain"):
+                    tf.write(f"domain={s['domain']}\n")
+                cred_file = tf.name
+            cmd = [
+                "smbclient", f"//{s['host']}/{s['share']}",
+                "-A", cred_file,
+                "--option=client min protocol=SMB2",
+                "-c", "du",
+            ]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            m = re.search(r'(\d+)\s+blocks of size\s+(\d+)\.\s+(\d+)\s+blocks available',
+                          r.stdout + r.stderr)
+            if m:
+                bs = int(m.group(2))
+                return {"free": int(m.group(3)) * bs, "total": int(m.group(1)) * bs}
+            print(f"[storage] smbclient output: {r.stdout.strip() or r.stderr.strip()}")
+        except Exception as e:
+            print(f"[storage] SMB fout: {e}")
+        finally:
+            if cred_file:
+                try: Path(cred_file).unlink()
+                except Exception: pass
+        return None
+    return None  # FTP: niet ondersteund
+
 # ── Download Queue ────────────────────────────────────────────────
 class DownloadQueue:
     MAX_RETRIES = 3
@@ -917,6 +982,8 @@ class DownloadQueue:
         self.history: List[dict] = []
         self.current: Optional[dict] = None
         self._wt:     Optional[threading.Thread] = None
+        self._proc:   Optional[subprocess.Popen] = None
+        self._cancel_flag: bool = False
 
     def _entry(self, fp: str) -> dict:
         if fp.startswith(("__smb__:", "__ftp__:")):
@@ -945,6 +1012,17 @@ class DownloadQueue:
     def clear_history(self):
         with self._lock: self.history.clear()
 
+    def cancel(self) -> bool:
+        with self._lock:
+            if not self.current:
+                return False
+            self._cancel_flag = True
+        proc = self._proc
+        if proc and proc.poll() is None:
+            try: proc.kill()
+            except Exception: pass
+        return True
+
     def retry(self, iid):
         with self._lock:
             it=next((e for e in self.history if e["id"]==iid),None)
@@ -964,12 +1042,17 @@ class DownloadQueue:
             with self._lock:
                 if not self.queue: self.current=None; return
                 e = self.queue.pop(0); self.current = e
+                self._cancel_flag = False
             ok = self._process(e)
             with self._lock:
                 e["finished_at"] = datetime.datetime.now().isoformat(timespec="seconds")
-                e["status"] = "done" if ok else "failed"
-                if ok: e["progress"] = 100
+                if self._cancel_flag:
+                    e["status"] = "cancelled"
+                else:
+                    e["status"] = "done" if ok else "failed"
+                    if ok: e["progress"] = 100
                 self.history.insert(0, e); self.current = None
+                self._cancel_flag = False
 
     def _process(self, e):
         cfg      = load_conf()
@@ -1030,9 +1113,11 @@ class DownloadQueue:
 
             ok = False
             for attempt in range(1, self.MAX_RETRIES + 1):
+                if self._cancel_flag: return False
                 e.update({"attempt":attempt,"status":"downloading","progress":0,
-                          "speed":"","eta":"","error":None})
+                          "speed":"","eta":"","total_size":"","error":None})
                 ok = self._ytdlp(url, out_file, e)
+                if self._cancel_flag: return False
                 if ok: break
                 e["error"] = f"Poging {attempt} mislukt"
                 if attempt < self.MAX_RETRIES: time.sleep(3)
@@ -1131,7 +1216,7 @@ class DownloadQueue:
             "--no-warnings",
             "--newline",
             "--progress",
-            "--progress-template", "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
+            "--progress-template", "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress._total_bytes_str)s",
             "--buffer-size", "16K",
             "--no-part",
             "-o", output,
@@ -1140,6 +1225,7 @@ class DownloadQueue:
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     text=True, bufsize=8192)
+            self._proc = proc
             for line in proc.stdout:
                 line = line.strip()
                 if "|" in line:
@@ -1148,8 +1234,15 @@ class DownloadQueue:
                         try: e["progress"] = float(parts[0].strip().replace("%",""))
                         except ValueError: pass
                         e["speed"] = parts[1].strip(); e["eta"] = parts[2].strip()
-            proc.wait(); return proc.returncode == 0
+                        if len(parts) >= 4:
+                            size = parts[3].strip()
+                            if size and size not in ("N/A", "Unknown"):
+                                e["total_size"] = size
+            proc.wait()
+            self._proc = None
+            return proc.returncode == 0
         except Exception as ex:
+            self._proc = None
             e["error"] = str(ex); return False
 
 download_queue = DownloadQueue()
@@ -1211,6 +1304,7 @@ def settings():
         elif sec == "storage":
             mode = request.form.get("storage_mode","mount")
             cfg["storage"]["mode"] = mode
+            cfg["storage"]["show_gauge"] = request.form.get("show_gauge") == "on"
             for field in ("base","live","movies","series"):
                 val = request.form.get(field,"").strip()
                 if val: cfg["output"][field] = val
@@ -1520,6 +1614,9 @@ def api_clr_hist(): download_queue.clear_history(); return jsonify({"ok":True})
 @app.post("/api/queue/retry/<iid>")
 def api_retry(iid): download_queue.retry(iid); return jsonify({"ok":True})
 
+@app.post("/api/queue/cancel")
+def api_cancel(): return jsonify({"ok": download_queue.cancel()})
+
 # ── API: Postprocessing ───────────────────────────────────────────
 @app.post("/api/postprocess")
 def api_postprocess():
@@ -1573,6 +1670,27 @@ def api_test_smb(): return jsonify(smb_test(load_conf()))
 
 @app.post("/api/test/ftp")
 def api_test_ftp(): return jsonify(ftp_test(load_conf()))
+
+@app.get("/api/storage/info")
+def api_storage_info():
+    cfg  = load_conf()
+    mode = storage_mode(cfg)
+    if not cfg.get("storage", {}).get("show_gauge", True):
+        return jsonify({"mode": mode, "supported": False, "disabled": True})
+    info = storage_free_space(cfg)
+    out  = {"mode": mode, "supported": info is not None}
+    if info:
+        out.update(info)
+    if mode == "ftp":
+        out["message"] = "Schijfruimte opvragen is niet beschikbaar bij FTP."
+    elif mode == "smb" and info is None:
+        if not shutil.which("smbclient"):
+            out["message"] = "Installeer smbclient om schijfruimte op te vragen (apt install smbclient)."
+        else:
+            out["message"] = "Schijfruimte kon niet worden opgehaald van de SMB share."
+    elif mode == "mount" and info is None:
+        out["message"] = "Schijfruimte kon niet worden bepaald."
+    return jsonify(out)
 
 @app.post("/api/test/tmdb")
 def api_test_tmdb():

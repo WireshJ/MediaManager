@@ -247,6 +247,20 @@
           </div>
         </div>
 
+        <!-- ── Gauge ── -->
+        <div class="settings-divider mt-4">Weergave</div>
+        <div class="row g-3 mt-1">
+          <div class="col-12">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" name="show_gauge" id="show_gauge"
+                     {% if cfg.storage.show_gauge %}checked{% endif %}>
+              <label class="form-check-label" for="show_gauge">
+                Schijfruimte gauge tonen op de Queue pagina
+              </label>
+            </div>
+          </div>
+        </div>
+
         <!-- ── Gedeelde instellingen (alle modes) ── -->
         <div class="settings-divider mt-4">Bestandsextensies & Cache</div>
         <div class="row g-3 mt-1">
