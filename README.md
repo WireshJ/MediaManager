@@ -1,4 +1,4 @@
-# 🎬 M3U Studio
+# 🎬 MediaManager
 
 Een selfhosted webapplicatie voor het beheren van IPTV content via de Xtream Codes API.
 Download films en series rechtstreeks naar je NAS, met automatische Jellyfin integratie.
@@ -40,8 +40,8 @@ Download films en series rechtstreeks naar je NAS, met automatische Jellyfin int
 
 ```bash
 # 1. Clone de repository
-git clone https://github.com/WireshJ/M3Ustudio.git
-cd M3Ustudio
+git clone https://github.com/WireshJ/MediaManager.git
+cd MediaManager
 
 # 2. Installeer dependencies
 pip install -r requirements.txt --break-system-packages
@@ -181,4 +181,4 @@ Stel je opslaglocatie in via **Instellingen → Storage & Paden**:
 
 ## 📦 Versie
 
-Zie [Releases](https://github.com/WireshJ/M3Ustudio/releases) voor de changelog.
+Zie [Releases](https://github.com/WireshJ/MediaManager/releases) voor de changelog.
