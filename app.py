@@ -1317,6 +1317,8 @@ def settings():
                 "verify_tls": request.form.get("verify_tls") == "on",
                 "timeout":    int(request.form.get("timeout") or 15),
             })
+            ttl = request.form.get("ttl_hours","").strip()
+            if ttl.isdigit(): cfg["cache"]["ttl_hours"] = int(ttl)
         elif sec == "storage":
             mode = request.form.get("storage_mode","mount")
             cfg["storage"]["mode"] = mode
@@ -1329,7 +1331,6 @@ def settings():
                 "movie":   (request.form.get("ext_movie") or "").strip() or None,
                 "episode": (request.form.get("ext_episode") or "").strip() or None,
             })
-            cfg["cache"]["ttl_hours"] = max(0, int(request.form.get("ttl_hours") or 6))
             cfg["storage"]["smb"].update({
                 "host":        request.form.get("smb_host","").strip(),
                 "share":       request.form.get("smb_share","").strip(),

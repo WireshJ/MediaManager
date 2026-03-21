@@ -1,6 +1,6 @@
 services:
   mediamanager:
-    build: .
+    image: ghcr.io/wireshj/mediamanager:latest
     container_name: mediamanager
     restart: unless-stopped
     ports:
@@ -8,5 +8,7 @@ services:
     volumes:
       # Bewaar instellingen en data buiten de container
       - ./data:/app/data
+      # Mount voor media opslag (pas het linker pad aan naar jouw situatie)
+      - /mnt/media:/mnt/media
     environment:
       - PORT=8080

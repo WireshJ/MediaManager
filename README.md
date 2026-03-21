@@ -38,6 +38,39 @@ Download films en series rechtstreeks naar je NAS, met automatische Jellyfin int
 
 ## 🚀 Installatie
 
+### 🐳 Docker (aanbevolen)
+
+```bash
+# 1. Maak een map aan voor de data
+mkdir -p /opt/mediamanager/data
+
+# 2. Download de docker-compose.yml
+curl -o /opt/mediamanager/docker-compose.yml \
+  https://raw.githubusercontent.com/WireshJ/MediaManager/main/docker-compose.yml
+
+# 3. Start de container
+cd /opt/mediamanager
+docker compose up -d
+```
+
+Open vervolgens `http://localhost:8080` in je browser.
+
+> **Let op:** Pas in `docker-compose.yml` het volume `/mnt/media:/mnt/media` aan naar jouw media locatie.
+
+#### Docker management UI (Arcane / Portainer)
+
+Gebruik het image: `ghcr.io/wireshj/mediamanager:latest`
+
+Volumes:
+- `/pad/naar/data:/app/data` — instellingen en cache
+- `/mnt/media:/mnt/media` — media opslag
+
+Poort: `8080`
+
+---
+
+### 🐍 Handmatig (Python)
+
 ```bash
 # 1. Clone de repository
 git clone https://github.com/WireshJ/MediaManager.git
@@ -50,12 +83,10 @@ pip install -r requirements.txt --break-system-packages
 python app.py
 ```
 
-Open vervolgens `http://localhost:8080` in je browser.
-
 ### Aangepaste poort of data map
 
 ```bash
-DATA_DIR=/opt/m3ustudio/data PORT=8080 python app.py
+DATA_DIR=/opt/mediamanager/data PORT=8080 python app.py
 ```
 
 ---
@@ -65,21 +96,21 @@ DATA_DIR=/opt/m3ustudio/data PORT=8080 python app.py
 ### 1. Maak het service bestand aan
 
 ```bash
-nano /etc/systemd/system/m3ustudio.service
+nano /etc/systemd/system/mediamanager.service
 ```
 
 ```ini
 [Unit]
-Description=M3U Studio
+Description=MediaManager
 After=network.target
 
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/m3ustudio
-Environment=DATA_DIR=/opt/m3ustudio/data
+WorkingDirectory=/opt/mediamanager
+Environment=DATA_DIR=/opt/mediamanager/data
 Environment=PORT=8080
-ExecStart=/usr/bin/python3 /opt/m3ustudio/app.py
+ExecStart=/usr/bin/python3 /opt/mediamanager/app.py
 Restart=on-failure
 RestartSec=10
 
@@ -93,16 +124,16 @@ WantedBy=multi-user.target
 
 ```bash
 systemctl daemon-reload
-systemctl enable m3ustudio
-systemctl start m3ustudio
-systemctl status m3ustudio
+systemctl enable mediamanager
+systemctl start mediamanager
+systemctl status mediamanager
 ```
 
 ### 3. Logs bekijken
 
 ```bash
-journalctl -u m3ustudio -f        # live
-journalctl -u m3ustudio -n 100    # laatste 100 regels
+journalctl -u mediamanager -f        # live
+journalctl -u mediamanager -n 100    # laatste 100 regels
 ```
 
 ---
