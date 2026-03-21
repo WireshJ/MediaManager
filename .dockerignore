@@ -1,0 +1,25 @@
+# Data (wordt via volume mount beschikbaar gesteld)
+data/
+
+# Git
+.git/
+.github/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+.claude/
+
+# Docs
+README.md
