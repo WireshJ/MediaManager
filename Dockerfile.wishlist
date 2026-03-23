@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Systeem dependencies: smbclient voor schijfruimte gauge, ffmpeg/ffprobe voor kwaliteitscheck
+# Systeem dependencies inclusief ffmpeg/ffprobe voor wishlist kwaliteitscheck
 RUN apt-get update && apt-get install -y \
     smbclient \
     ffmpeg \
@@ -13,7 +13,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Data map aanmaken (wordt overschreven door volume mount)
 RUN mkdir -p /app/data
 
 EXPOSE 8080

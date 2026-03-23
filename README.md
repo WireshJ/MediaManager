@@ -6,7 +6,7 @@ Download films en series rechtstreeks naar je NAS, met automatische Jellyfin int
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![Flask](https://img.shields.io/badge/Flask-3.0-000000?logo=flask)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-1.0.1-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
 
 ---
 
@@ -18,10 +18,11 @@ Download films en series rechtstreeks naar je NAS, met automatische Jellyfin int
 | 🔍 **Discover** | Trending en populaire titels via TMDB, doorzoekbaar in je IPTV provider |
 | 📚 **Bibliotheek** | Bekijk alle content op je media share, voeg toe aan de download queue |
 | ⏳ **Queue** | Download via yt-dlp met voortgangsbalk, retry en schijfruimte indicator |
+| 🎯 **Wishlist** | Automatisch downloaden zodra een film/serie beschikbaar is bij je provider |
 | ⚙️ **Instellingen** | Beheer opslag, integraties en beveiliging |
 
 ### 🔧 Onder de motorkap
-- **TMDB naamgeving** — Films en series krijgen bij toevoegen direct de officiële TMDB naam (`"Breaking Bad"`, `"The Dark Knight"`). Fallback op providernaam als TMDB uitstaat
+- **TMDB naamgeving** — Films en series krijgen bij toevoegen direct de officiële TMDB naam. Fallback op providernaam als TMDB uitstaat
 - **Postprocessing** — Prefix/suffix cleaning en automatisch samenvoegen van dubbele serie-mappen
 - **Jellyfin push** — Automatische library scan na aanmaken `.strm` of voltooide download
 - **Ondertitels** — Automatisch downloaden via OpenSubtitles na een download
@@ -29,19 +30,47 @@ Download films en series rechtstreeks naar je NAS, met automatische Jellyfin int
 
 ---
 
-## 📋 Vereisten
+## 🎯 Wishlist
 
-- Python 3.11+
-- `smbclient` (optioneel, voor schijfruimte weergave bij SMB mode)
+Voeg films en series toe aan de wishlist vanuit Discover. De app controleert automatisch of de titel beschikbaar is bij je provider en voldoet aan je kwaliteits- en taalvoorkeur.
+
+### Hoe werkt het?
+
+1. Klik op een film/serie in **Discover** → knop **Wishlist** in het detailvenster
+2. Kies een minimale kwaliteit (bijv. `1080p`) en/of gewenste taal (bijv. `EN`)
+3. De achtergrond-worker controleert periodiek alle wishlist-items
+4. Zodra een match gevonden wordt die aan de criteria voldoet → automatisch toegevoegd aan de bibliotheek
+
+### Statussen
+
+| Status | Betekenis |
+|--------|-----------|
+| ⏳ **Wachtend** | Nog niet gevonden bij de provider |
+| 🔍 **Gevonden** | Beschikbaar maar kwaliteit/taal voldoet nog niet |
+| ✅ **In bibliotheek** | Toegevoegd en klaar |
+
+### Handmatig toevoegen
+
+Als de film gevonden is maar de automatische criteria niet matchen, klik je op de poster in de wishlist. Je ziet alle beschikbare versies bij de provider en kunt er één handmatig als `.strm` aanmaken.
+
+### Docker image
+
+Voor de Wishlist functie (inclusief kwaliteitscheck via ffprobe) heb je het **wishlist image** nodig:
+
+```
+ghcr.io/wireshj/mediamanager:wishlist
+```
+
+Het standaard image (`:latest`) bevat geen ffmpeg en ondersteunt geen automatische kwaliteitscheck.
 
 ---
 
-## 🚀 Installatie
+## 🐳 Docker installatie
 
-### 🐳 Docker (aanbevolen)
+### Snel starten
 
 ```bash
-# 1. Maak een map aan voor de data
+# 1. Maak een data map aan
 mkdir -p /opt/mediamanager/data
 
 # 2. Download de docker-compose.yml
@@ -57,13 +86,20 @@ Open vervolgens `http://localhost:8080` in je browser.
 
 > **Let op:** Pas in `docker-compose.yml` het volume `/mnt/media:/mnt/media` aan naar jouw media locatie.
 
+### Docker images
+
+| Image | Grootte | Gebruik |
+|-------|---------|---------|
+| `ghcr.io/wireshj/mediamanager:latest` | ~315 MB | Standaard gebruik |
+| `ghcr.io/wireshj/mediamanager:wishlist` | ~900 MB | Met Wishlist + kwaliteitscheck (ffprobe) |
+
 #### Docker management UI (Arcane / Portainer)
 
-Gebruik het image: `ghcr.io/wireshj/mediamanager:latest`
+Gebruik het image: `ghcr.io/wireshj/mediamanager:latest` of `:wishlist`
 
 Volumes:
 - `/pad/naar/data:/app/data` — instellingen en cache
-- `/mnt/media:/mnt/media` — media opslag
+- `/mnt/media:/mnt/media` — media opslag (bij mount mode)
 
 Poort: `8080`
 
@@ -79,7 +115,10 @@ cd MediaManager
 # 2. Installeer dependencies
 pip install -r requirements.txt --break-system-packages
 
-# 3. Start de app
+# 3. (Optioneel) Installeer ffmpeg voor Wishlist kwaliteitscheck
+apt install ffmpeg -y
+
+# 4. Start de app
 python app.py
 ```
 
@@ -110,6 +149,7 @@ User=root
 WorkingDirectory=/opt/mediamanager
 Environment=DATA_DIR=/opt/mediamanager/data
 Environment=PORT=8080
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/usr/bin/python3 /opt/mediamanager/app.py
 Restart=on-failure
 RestartSec=10
@@ -166,6 +206,7 @@ Stel je opslaglocatie in via **Instellingen → Storage & Paden**:
 | 🎞️ **Jellyfin** | Automatische library scan | URL + API key |
 | 🎭 **TMDB** | Metadata, posters, Discover pagina | Gratis API key |
 | 💬 **OpenSubtitles** | Automatisch ondertitels downloaden | Account + API key |
+| 🎯 **Wishlist** | Automatisch toevoegen op kwaliteit/taal | ffmpeg (wishlist image) |
 
 - **TMDB API key** — Gratis aan te vragen op [themoviedb.org](https://www.themoviedb.org/settings/api)
 - **Jellyfin API key** — Te vinden in Jellyfin → Dashboard → API Keys
@@ -179,12 +220,12 @@ Stel je opslaglocatie in via **Instellingen → Storage & Paden**:
 ├── Live/
 │   └── Canvas.strm
 ├── Films/
-│   └── The Dark Knight (2008)/
-│       └── The Dark Knight (2008).mkv
+│   └── The Dark Knight/
+│       └── The Dark Knight.strm
 └── Series/
     └── Breaking Bad/
-        ├── Season 1/
-        │   ├── Breaking Bad S01E01.mkv
+        ├── Season 01/
+        │   ├── Breaking Bad S01E01.strm
         │   └── Breaking Bad S01E01.nl.srt
 ```
 
@@ -206,10 +247,24 @@ Stel je opslaglocatie in via **Instellingen → Storage & Paden**:
 |-----------|-----------|--------------|
 | `DATA_DIR` | `./data` | Map voor config, cache en tijdelijke bestanden |
 | `PORT` | `8080` | Poort waarop de app luistert |
-| `APP_SECRET` | *(automatisch)* | Flask sessie sleutel — wordt automatisch aangemaakt in `data/.secret_key` als niet ingesteld |
+| `APP_SECRET` | *(automatisch)* | Flask sessie sleutel |
+| `PYTHONUNBUFFERED` | `1` | Aanbevolen bij gebruik als service |
 
 ---
 
-## 📦 Versie
+## 📦 Changelog
 
-Zie [Releases](https://github.com/WireshJ/MediaManager/releases) voor de changelog.
+### v1.1.0
+- 🎯 Wishlist feature: automatisch toevoegen op kwaliteit en taal
+- 🔍 Multi-stream selectie: als criteria niet matchen, kies handmatig uit alle beschikbare versies
+- 🐳 Aparte Docker image (`:wishlist`) met ffmpeg voor kwaliteitscheck via ffprobe
+- 🔧 Diverse UI fixes (zwart-op-zwart tekst, tags, navigatie)
+
+### v1.0.1
+- TMDB naamgeving bij toevoegen
+- Versienummer in navbar
+
+### v1.0.0
+- Eerste release
+
+Zie [Releases](https://github.com/WireshJ/MediaManager/releases) voor details.

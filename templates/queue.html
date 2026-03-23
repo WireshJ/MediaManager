@@ -5,7 +5,7 @@
 <div class="d-flex align-items-center justify-content-between mb-4">
   <h2 class="mb-0">⏳ Download Queue</h2>
   <div id="storage-content" style="text-align:center;min-width:110px">
-    <span class="text-muted small">Laden…</span>
+    <span class="text-white-50 small">Laden…</span>
   </div>
 </div>
 
@@ -117,7 +117,7 @@ async function fetchStorage() {
     } else if (d.supported && d.free != null) {
       el.innerHTML = renderStorageGauge(d.free, d.total);
     } else {
-      el.innerHTML = `<span class="text-muted small">${d.message || 'Schijfruimte niet beschikbaar.'}</span>`;
+      el.innerHTML = `<span class="text-white-50 small">${d.message || 'Schijfruimte niet beschikbaar.'}</span>`;
     }
   } catch(e) { console.error('Storage info fout:', e); }
 }
@@ -162,7 +162,7 @@ function renderActive(cur) {
         ${cur.total_size?`<span>📦 ${cur.total_size}</span>`:''}
         ${cur.speed?`<span>⚡ ${cur.speed}</span>`:''}
         ${cur.eta?`<span>ETA: ${cur.eta}</span>`:''}
-        ${cur.attempt>1?`<span class="text-muted">poging ${cur.attempt}</span>`:''}
+        ${cur.attempt>1?`<span class="text-white-50">poging ${cur.attempt}</span>`:''}
       </div>
     </div>`;
 }

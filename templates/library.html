@@ -5,7 +5,7 @@
 <div class="d-flex align-items-center justify-content-between mb-4 flex-wrap gap-2">
   <div>
     <h2 class="mb-0">📁 Bibliotheek</h2>
-    <small class="text-muted">
+    <small class="text-white-50">
       {{ films|length }} film(s) · {{ series|length }} serie(s)
     </small>
   </div>
@@ -111,7 +111,7 @@
                 {% if info.rating and info.rating > 0 %}
                   <span class="text-warning">★ {{ info.rating }}</span>
                 {% endif %}
-                <span class="text-muted">{{ serie_data.seasons | length }} seizoen(en)</span>
+                <span class="text-white-50">{{ serie_data.seasons | length }} seizoen(en)</span>
               </div>
               {% if info.overview %}
               <div class="serie-overview">{{ info.overview }}</div>
@@ -126,7 +126,7 @@
             <div class="season-block">
               <div class="season-header">
                 <span>{{ season_label }}</span>
-                <span class="text-muted me-2">{{ eps | length }} afl.</span>
+                <span class="text-white-50 me-2">{{ eps | length }} afl.</span>
                 <button type="button" class="btn-xs-outline"
                         onclick="selSeason('{{ ssid }}','{{ sid }}-card',true); event.stopPropagation()">✓</button>
                 <button type="button" class="btn-xs-outline"
