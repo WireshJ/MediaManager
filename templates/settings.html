@@ -453,7 +453,7 @@
             <p class="text-white-50 small mb-0">De wishlist wordt automatisch gecontroleerd op hetzelfde interval als de Xtream API cache (instelbaar bij Xtream API → Cache TTL).</p>
           </div>
           <div class="col-12">
-            <label class="form-label text-white-50 small mb-2">Toegestane talen (globale voorkeur)</label>
+            <label class="form-label text-white-50 small mb-2">Beschikbare taalfilters in wishlist</label>
             <div class="d-flex gap-3 flex-wrap">
               {% set wl_langs = cfg.get('wishlist', {}).get('languages', ['en', 'nl']) %}
               {% for lang_code, lang_label in [('en','Engels'), ('nl','Nederlands'), ('de','Duits'), ('fr','Frans'), ('es','Spaans')] %}
@@ -465,7 +465,7 @@
               </div>
               {% endfor %}
             </div>
-            <p class="text-white-50 small mt-2 mb-0">Wordt gebruikt als een wishlist-item geen specifieke taalvoorkeur heeft.</p>
+            <p class="text-white-50 small mt-2 mb-0">Bepaalt welke taalopties beschikbaar zijn bij het toevoegen aan de wishlist.</p>
           </div>
           <div class="col-12">
             <button type="submit" class="btn btn-primary">💾 Opslaan</button>

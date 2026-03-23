@@ -6,7 +6,7 @@ Download films en series rechtstreeks naar je NAS, met automatische Jellyfin int
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![Flask](https://img.shields.io/badge/Flask-3.0-000000?logo=flask)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.1-blue)
 
 ---
 
@@ -253,6 +253,13 @@ Stel je opslaglocatie in via **Instellingen → Storage & Paden**:
 ---
 
 ## 📦 Changelog
+
+### v1.1.1
+- 🔍 Zoekbalk in Discover: zoek films en series via TMDB
+- ⚙️ Taalfilter in Wishlist-instellingen: bepaal welke taalopties beschikbaar zijn bij toevoegen
+- 🐛 Fix: "Maak .strm" vanuit wishlist voegde toe aan download queue in plaats van bibliotheek
+- 🐛 Fix: wishlist worker spinloop als wishlist leeg is
+- 🐛 Fix: geheugenoptimalisatie worker (movies/series.json alleen laden als nodig)
 
 ### v1.1.0
 - 🎯 Wishlist feature: automatisch toevoegen op kwaliteit en taal

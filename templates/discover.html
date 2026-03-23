@@ -91,11 +91,30 @@
 .skeleton-poster { width: 140px; aspect-ratio: 2/3; flex: 0 0 140px; }
 </style>
 
-<div class="d-flex align-items-center justify-content-between mb-4">
+<div class="d-flex align-items-center justify-content-between mb-3">
   <h2 class="mb-0">🔥 Discover</h2>
   <div class="d-flex gap-2">
     <button class="btn btn-outline-secondary btn-sm" onclick="loadDiscover(true)">🔄 Verversen</button>
   </div>
+</div>
+
+<!-- Zoekbalk -->
+<div class="mb-4">
+  <div class="input-group">
+    <input type="text" id="discover-search" class="form-control bg-dark text-white border-secondary"
+           placeholder="Zoek films en series via TMDB…" autocomplete="off">
+    <button class="btn btn-outline-secondary" type="button" onclick="clearSearch()" id="search-clear-btn" style="display:none">✕</button>
+  </div>
+</div>
+
+<!-- Zoekresultaten -->
+<div id="search-results-wrap" style="display:none">
+  <div class="section-title" id="search-results-title"></div>
+  <div id="search-results-loading" style="display:none" class="text-white-50 small mb-3">
+    <span class="spinner-border spinner-border-sm me-1"></span>Zoeken…
+  </div>
+  <div class="poster-row" id="search-results-row"></div>
+  <hr class="section-divider">
 </div>
 
 <!-- Hero -->
@@ -192,11 +211,12 @@
           <label class="form-label small text-white-50">Taalvoorkeur audiotrack</label>
           <select class="form-select form-select-sm bg-dark text-white border-secondary" id="wl-lang">
             <option value="">Geen voorkeur</option>
-            <option value="nl">Nederlands (nl)</option>
-            <option value="en">Engels (en)</option>
-            <option value="de">Duits (de)</option>
-            <option value="fr">Frans (fr)</option>
-            <option value="es">Spaans (es)</option>
+            {% set wl_langs = cfg.get('wishlist', {}).get('languages', ['en', 'nl']) %}
+            {% for lang_code, lang_label in [('nl','Nederlands'), ('en','Engels'), ('de','Duits'), ('fr','Frans'), ('es','Spaans')] %}
+              {% if lang_code in wl_langs %}
+            <option value="{{ lang_code }}">{{ lang_label }} ({{ lang_code }})</option>
+              {% endif %}
+            {% endfor %}
           </select>
         </div>
       </div>
@@ -238,6 +258,55 @@ let _data = null;
 let _heroItems = [];
 let _heroIdx   = 0;
 let _heroTimer  = null;
+
+// ── Zoeken ───────────────────────────────────────────────────────
+let _searchTimer = null;
+
+document.getElementById("discover-search").addEventListener("input", function() {
+  clearTimeout(_searchTimer);
+  const q = this.value.trim();
+  document.getElementById("search-clear-btn").style.display = q ? "" : "none";
+  if (!q) { clearSearch(); return; }
+  _searchTimer = setTimeout(() => doSearch(q), 400);
+});
+
+document.getElementById("discover-search").addEventListener("keydown", function(e) {
+  if (e.key === "Escape") clearSearch();
+});
+
+async function doSearch(q) {
+  document.getElementById("search-results-wrap").style.display = "";
+  document.getElementById("discover-content").style.display = "none";
+  document.getElementById("hero").style.display = "none";
+  document.getElementById("search-results-loading").style.display = "";
+  document.getElementById("search-results-row").innerHTML = "";
+  document.getElementById("search-results-title").textContent = `Zoekresultaten voor "${q}"`;
+
+  try {
+    const d = await fetch(`/api/tmdb/search?q=${encodeURIComponent(q)}`).then(r => r.json());
+    document.getElementById("search-results-loading").style.display = "none";
+    if (!d.ok || !d.items.length) {
+      document.getElementById("search-results-row").innerHTML =
+        `<div class="text-white-50 small">Geen resultaten gevonden.</div>`;
+      return;
+    }
+    renderRow("search-results-row", d.items);
+  } catch(ex) {
+    document.getElementById("search-results-loading").style.display = "none";
+    document.getElementById("search-results-row").innerHTML =
+      `<div class="text-white-50 small">Fout: ${esc(ex.message)}</div>`;
+  }
+}
+
+function clearSearch() {
+  document.getElementById("discover-search").value = "";
+  document.getElementById("search-clear-btn").style.display = "none";
+  document.getElementById("search-results-wrap").style.display = "none";
+  if (_data) {
+    document.getElementById("discover-content").style.display = "";
+    document.getElementById("hero").style.removeProperty("display");
+  }
+}
 
 // ── Laden ────────────────────────────────────────────────────────
 async function loadDiscover(force=false) {
