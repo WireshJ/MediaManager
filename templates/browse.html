@@ -31,7 +31,7 @@
         <input id="q-live" class="form-control search-input" placeholder="🔍 Zoek live kanaal... (of '*' voor alles)">
         <button id="btn-live" class="btn btn-secondary" onclick="loadLive()">Zoeken</button>
       </div>
-      <small class="text-muted" id="ts-live"></small>
+      <small class="text-white-50" id="ts-live"></small>
     </div>
     <div id="tbl-live" class="browse-result"></div>
   </div>
@@ -43,7 +43,7 @@
         <input id="q-movies" class="form-control search-input" placeholder="🔍 Zoek film... (of '*' voor alles)">
         <button id="btn-movies" class="btn btn-secondary" onclick="loadMovies()">Zoeken</button>
       </div>
-      <small class="text-muted" id="ts-movies"></small>
+      <small class="text-white-50" id="ts-movies"></small>
     </div>
     <div id="tbl-movies" class="browse-result"></div>
   </div>
@@ -55,7 +55,7 @@
         <input id="q-series" class="form-control search-input" placeholder="🔍 Zoek serie... (of '*' voor alles)">
         <button id="btn-series" class="btn btn-secondary" onclick="loadSeries()">Zoeken</button>
       </div>
-      <small class="text-muted" id="ts-series"></small>
+      <small class="text-white-50" id="ts-series"></small>
     </div>
     <div id="tbl-series" class="browse-result"></div>
   </div>
@@ -126,7 +126,7 @@ function renderLoading(id) {
 function renderTable(containerId, items, cols, actionsFn) {
   if (!items || !items.length) {
     document.getElementById(containerId).innerHTML =
-      `<div class="browse-hint text-muted">Geen resultaten gevonden.</div>`; return;
+      `<div class="browse-hint text-white-50">Geen resultaten gevonden.</div>`; return;
   }
   let h = `<div class="table-responsive">
     <table class="table table-dark table-hover table-sm align-middle mb-0">
@@ -149,7 +149,7 @@ async function loadLive() {
     if (!d.ok) { renderErr("tbl-live", d.error); return; }
     document.getElementById("ts-live").textContent = d.cached_at ? "Cache: "+fmtDate(d.cached_at) : "";
     renderTable("tbl-live", d.items, [
-      {title:"#",    render: it=>`<span class="text-muted font-mono">${it.stream_id}</span>`},
+      {title:"#",    render: it=>`<span class="text-white-50 font-mono">${it.stream_id}</span>`},
       {title:"Naam", render: it=>esc(it.name||"")},
       {title:"Groep",render: it=>esc(it.category_name||"")},
     ], it=>`<button class="btn btn-primary btn-sm btn-pill"
@@ -172,9 +172,9 @@ async function loadMovies() {
     if (!d.ok) { renderErr("tbl-movies", d.error); return; }
     document.getElementById("ts-movies").textContent = d.cached_at ? "Cache: "+fmtDate(d.cached_at) : "";
     renderTable("tbl-movies", d.items, [
-      {title:"#",    render: it=>`<span class="text-muted font-mono">${it.stream_id}</span>`},
+      {title:"#",    render: it=>`<span class="text-white-50 font-mono">${it.stream_id}</span>`},
       {title:"Titel",render: it=>esc(it.name||"")},
-      {title:"Ext",  render: it=>`<span class="font-mono text-muted">${it.container_extension||"mp4"}</span>`},
+      {title:"Ext",  render: it=>`<span class="font-mono text-white-50">${it.container_extension||"mp4"}</span>`},
     ], it=>`<button class="btn btn-primary btn-sm btn-pill"
         onclick="genMovie(${it.stream_id},'${(it.name||'').replace(/'/g,"&#39;")}','${it.container_extension||''}')">
         📁 .strm</button>`);
@@ -196,7 +196,7 @@ async function loadSeries() {
     if (!d.ok) { renderErr("tbl-series", d.error); return; }
     document.getElementById("ts-series").textContent = d.cached_at ? "Cache: "+fmtDate(d.cached_at) : "";
     renderTable("tbl-series", d.items, [
-      {title:"#",    render: it=>`<span class="text-muted font-mono">${it.series_id}</span>`},
+      {title:"#",    render: it=>`<span class="text-white-50 font-mono">${it.series_id}</span>`},
       {title:"Titel",render: it=>esc(it.name||"")},
     ], it=>`
       <button class="btn btn-outline-secondary btn-sm btn-pill me-1"
@@ -220,7 +220,7 @@ async function openSeriesDetail(id, name) {
       <img src="${info.info.cover_big||info.info.cover}" class="img-fluid rounded" style="max-height:200px">
     </div>`;
   }
-  if (d.cached_at) html+=`<p class="text-muted small">Cache: ${fmtDate(d.cached_at)}</p>`;
+  if (d.cached_at) html+=`<p class="text-white-50 small">Cache: ${fmtDate(d.cached_at)}</p>`;
   const eps=info.episodes||{};
   Object.keys(eps).sort((a,b)=>parseInt(a)-parseInt(b)).forEach(s=>{
     html+=`<h5 class="text-warning mt-3">Seizoen ${s}</h5>
@@ -228,13 +228,13 @@ async function openSeriesDetail(id, name) {
       <table class="table table-dark table-sm table-striped">
         <thead><tr><th>#</th><th>Titel</th><th>Ext</th></tr></thead><tbody>`;
     (eps[s]||[]).forEach(ep=>{
-      html+=`<tr><td class="font-mono text-muted">${ep.episode_num||ep.num||""}</td>
+      html+=`<tr><td class="font-mono text-white-50">${ep.episode_num||ep.num||""}</td>
              <td>${esc(ep.title||ep.name||"")}</td>
-             <td class="font-mono text-muted">${ep.container_extension||""}</td></tr>`;
+             <td class="font-mono text-white-50">${ep.container_extension||""}</td></tr>`;
     });
     html+=`</tbody></table></div>`;
   });
-  bodyEl.innerHTML = html || "<em class='text-muted'>Geen afleveringen gevonden.</em>";
+  bodyEl.innerHTML = html || "<em class='text-white-50'>Geen afleveringen gevonden.</em>";
   document.getElementById("btnDlSeries").onclick = ()=>genSeries(id);
 }
 async function genSeries(id) {

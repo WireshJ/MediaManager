@@ -7,13 +7,21 @@
     <h2 class="mb-0">🎯 Wishlist</h2>
     <span id="wl-badge" class="badge bg-secondary" style="display:none"></span>
   </div>
-  <button class="btn btn-outline-secondary btn-sm" onclick="refreshCache()">
-    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" class="me-1">
-      <path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/>
-      <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/>
-    </svg>
-    Cache vernieuwen
-  </button>
+  <div class="d-flex gap-2">
+    <button class="btn btn-outline-warning btn-sm" onclick="checkNow(this)" title="Wishlist direct controleren op nieuwe matches">
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" class="me-1">
+        <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001q.044.06.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1 1 0 0 0-.115-.099zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0"/>
+      </svg>
+      Controleer nu
+    </button>
+    <button class="btn btn-outline-secondary btn-sm" onclick="refreshCache(this)">
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" class="me-1">
+        <path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/>
+        <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/>
+      </svg>
+      Cache vernieuwen
+    </button>
+  </div>
 </div>
 
 <p class="text-white-50 small mb-4">
@@ -26,6 +34,37 @@
   Wishlist is leeg. Voeg titels toe via Discover.
 </div>
 <div id="wishlist-wrap" class="row g-3"></div>
+
+<!-- ── Streams modal ── -->
+<div class="modal fade" id="streamsModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content bg-dark text-white border-secondary">
+      <div class="modal-header border-secondary pb-2">
+        <div class="d-flex align-items-center gap-3">
+          <img id="sm-poster" src="" alt="" class="rounded" style="width:48px;height:72px;object-fit:cover;display:none">
+          <div>
+            <h5 class="modal-title mb-0" id="sm-title"></h5>
+            <p class="text-white-50 small mb-0 mt-1">Kies een beschikbare versie om te downloaden</p>
+            <div id="sm-found-info" class="mt-1" style="display:none">
+              <span class="badge bg-secondary me-1" id="sm-found-quality"></span>
+              <span class="badge bg-secondary" id="sm-found-langs"></span>
+            </div>
+          </div>
+        </div>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <div id="sm-loading" class="text-center text-white-50 py-4">
+          <span class="spinner-border spinner-border-sm me-2"></span>Streams ophalen…
+        </div>
+        <div id="sm-empty" class="text-white-50 text-center py-4" style="display:none">
+          Geen streams gevonden in de provider-catalogus.
+        </div>
+        <ul id="sm-list" class="list-group list-group-flush" style="display:none"></ul>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- ── Toast notificaties ── -->
 <div class="position-fixed bottom-0 end-0 p-3" style="z-index:1100">
@@ -94,15 +133,25 @@ function renderList(items) {
     const col = document.createElement("div");
     col.className = "col-6 col-sm-4 col-md-3 col-lg-2";
 
+    const clickable = item.status === "gevonden";
     const poster = item.poster
       ? `<img src="${esc(item.poster)}" alt="${esc(item.title)}" class="wl-poster-img" loading="lazy">`
       : `<div class="wl-poster-placeholder">${item.type === "movie" ? "🎬" : "📺"}</div>`;
 
+    const fq = item.found_quality || "";
+    const fl = (item.found_langs || []).join(", ");
+    const foundBadge = clickable
+      ? `<div class="wl-found-hint">Klik voor opties</div>`
+      : "";
+
     col.innerHTML = `
-      <div class="wl-card">
+      <div class="wl-card${clickable ? ' wl-card-clickable' : ''}"
+           ${clickable ? `onclick="openStreams('${item.id}', '${esc(fq)}', '${esc(fl)}')"` : ""}>
         <div class="wl-poster">
           ${poster}
-          <button class="wl-delete-btn" title="Verwijderen van wishlist" onclick="deleteItem('${item.id}')">✕</button>
+          ${foundBadge}
+          <button class="wl-delete-btn" title="Verwijderen van wishlist"
+                  onclick="event.stopPropagation();deleteItem('${item.id}')">✕</button>
         </div>
         <div class="wl-card-info">
           <div class="wl-card-title">${esc(item.title)}</div>
@@ -117,20 +166,118 @@ function renderList(items) {
   });
 }
 
+// ── Streams modal ─────────────────────────────────────────────────
+let _currentWlId = null;
+
+async function openStreams(id, foundQuality, foundLangs) {
+  _currentWlId = id;
+  const modal = new bootstrap.Modal(document.getElementById("streamsModal"));
+
+  document.getElementById("sm-loading").style.display    = "";
+  document.getElementById("sm-empty").style.display      = "none";
+  document.getElementById("sm-list").style.display       = "none";
+  document.getElementById("sm-list").innerHTML           = "";
+  document.getElementById("sm-title").textContent        = "…";
+  document.getElementById("sm-poster").style.display     = "none";
+  document.getElementById("sm-found-info").style.display = "none";
+
+  if (foundQuality || foundLangs) {
+    const fq = document.getElementById("sm-found-quality");
+    const fl = document.getElementById("sm-found-langs");
+    fq.textContent = foundQuality ? `Gevonden: ${foundQuality}` : "";
+    fq.style.display = foundQuality ? "" : "none";
+    fl.textContent = foundLangs ? `Talen: ${foundLangs}` : "";
+    fl.style.display = foundLangs ? "" : "none";
+    document.getElementById("sm-found-info").style.display = "";
+  }
+
+  modal.show();
+
+  const r = await fetch(`/api/wishlist/${id}/streams`);
+  const d = await r.json();
+
+  document.getElementById("sm-loading").style.display = "none";
+
+  if (!d.ok) {
+    document.getElementById("sm-empty").style.display = "";
+    return;
+  }
+
+  document.getElementById("sm-title").textContent = d.title || "";
+  if (d.poster) {
+    const img = document.getElementById("sm-poster");
+    img.src = d.poster;
+    img.style.display = "";
+  }
+
+  if (!d.streams.length) {
+    document.getElementById("sm-empty").style.display = "";
+    return;
+  }
+
+  const list = document.getElementById("sm-list");
+  list.style.display = "";
+
+  d.streams.forEach(s => {
+    const li = document.createElement("li");
+    li.className = "list-group-item bg-dark text-white border-secondary d-flex justify-content-between align-items-center";
+    li.innerHTML = `
+      <span class="text-truncate me-2" style="max-width:75%">${esc(s.name)}</span>
+      <button class="btn btn-sm btn-outline-primary flex-shrink-0"
+              onclick="addStream('${id}', ${s.stream_id}, '${esc(s.ext)}', this)">
+        Maak .strm
+      </button>`;
+    list.appendChild(li);
+  });
+}
+
+async function addStream(wlId, streamId, ext, btn) {
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span>`;
+
+  const r = await fetch(`/api/wishlist/${wlId}/add-stream`, {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify({stream_id: streamId, ext})
+  });
+  const d = await r.json();
+
+  if (d.ok) {
+    bootstrap.Modal.getInstance(document.getElementById("streamsModal")).hide();
+    showToast("✅ Toegevoegd aan de download queue!");
+    loadList();
+  } else {
+    btn.disabled = false;
+    btn.textContent = "Maak .strm";
+    showToast(`❌ Fout: ${d.error}`);
+  }
+}
+
 async function deleteItem(id) {
   if (!confirm("Verwijderen van wishlist?")) return;
   await fetch(`/api/wishlist/${id}`, {method:"DELETE"});
   loadList();
 }
 
-async function refreshCache() {
-  const btn = event.currentTarget;
+async function checkNow(btn) {
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span> Bezig…`;
+  await fetch("/api/wishlist/check", {method:"POST"});
+  // Geef worker even tijd om te draaien, laad lijst daarna opnieuw
+  setTimeout(() => {
+    loadList();
+    btn.disabled = false;
+    btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" class="me-1"><path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001q.044.06.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1 1 0 0 0-.115-.099zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0"/></svg> Controleer nu`;
+  }, 15000);
+}
+
+async function refreshCache(btn) {
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span> Bezig…`;
   await fetch("/api/refresh?scope=all", {method:"POST"});
   btn.disabled = false;
   btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" class="me-1"><path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/></svg> Cache vernieuwen`;
-  showToast("✅ Cache vernieuwd");
+  showToast("✅ Cache vernieuwd — wishlist wordt nu gecheckt…");
 }
 
 async function loadList() {
