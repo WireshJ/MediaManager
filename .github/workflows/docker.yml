@@ -6,8 +6,8 @@ on:
       - main
 
 jobs:
-  build-standard:
-    name: Build standard image (zonder ffmpeg)
+  build:
+    name: Build and push image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,36 +24,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push standard image
+      - name: Build and push image
         uses: docker/build-push-action@v5
         with:
           context: .
           file: Dockerfile
           push: true
-          tags: ghcr.io/wireshj/mediamanager:latest
-
-  build-wishlist:
-    name: Build wishlist image (met ffmpeg)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build and push wishlist image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile.wishlist
-          push: true
-          tags: ghcr.io/wireshj/mediamanager:wishlist
+          tags: |
+            ghcr.io/wireshj/mediamanager:latest
+            ghcr.io/wireshj/mediamanager:${{ github.sha }}

@@ -53,16 +53,6 @@ Voeg films en series toe aan de wishlist vanuit Discover. De app controleert aut
 
 Als de film gevonden is maar de automatische criteria niet matchen, klik je op de poster in de wishlist. Je ziet alle beschikbare versies bij de provider en kunt er één handmatig als `.strm` aanmaken.
 
-### Docker image
-
-Voor de Wishlist functie (inclusief kwaliteitscheck via ffprobe) heb je het **wishlist image** nodig:
-
-```
-ghcr.io/wireshj/mediamanager:wishlist
-```
-
-Het standaard image (`:latest`) bevat geen ffmpeg en ondersteunt geen automatische kwaliteitscheck.
-
 ---
 
 ## 🐳 Docker installatie
@@ -86,16 +76,15 @@ Open vervolgens `http://localhost:8080` in je browser.
 
 > **Let op:** Pas in `docker-compose.yml` het volume `/mnt/media:/mnt/media` aan naar jouw media locatie.
 
-### Docker images
+### Docker image
 
-| Image | Grootte | Gebruik |
-|-------|---------|---------|
-| `ghcr.io/wireshj/mediamanager:latest` | ~315 MB | Standaard gebruik |
-| `ghcr.io/wireshj/mediamanager:wishlist` | ~900 MB | Met Wishlist + kwaliteitscheck (ffprobe) |
+| Image | Gebruik |
+|-------|---------|
+| `ghcr.io/wireshj/mediamanager:latest` | Alle functies inclusief Wishlist |
 
 #### Docker management UI (Arcane / Portainer)
 
-Gebruik het image: `ghcr.io/wireshj/mediamanager:latest` of `:wishlist`
+Gebruik het image: `ghcr.io/wireshj/mediamanager:latest`
 
 Volumes:
 - `/pad/naar/data:/app/data` — instellingen en cache
@@ -115,8 +104,8 @@ cd MediaManager
 # 2. Installeer dependencies
 pip install -r requirements.txt --break-system-packages
 
-# 3. (Optioneel) Installeer ffmpeg voor Wishlist kwaliteitscheck
-apt install ffmpeg -y
+# 3. Installeer mediainfo voor Wishlist kwaliteitscheck
+apt install mediainfo -y
 
 # 4. Start de app
 python app.py
@@ -206,7 +195,7 @@ Stel je opslaglocatie in via **Instellingen → Storage & Paden**:
 | 🎞️ **Jellyfin** | Automatische library scan | URL + API key |
 | 🎭 **TMDB** | Metadata, posters, Discover pagina | Gratis API key |
 | 💬 **OpenSubtitles** | Automatisch ondertitels downloaden | Account + API key |
-| 🎯 **Wishlist** | Automatisch toevoegen op kwaliteit/taal | ffmpeg (wishlist image) |
+| 🎯 **Wishlist** | Automatisch toevoegen op kwaliteit/taal | mediainfo |
 
 - **TMDB API key** — Gratis aan te vragen op [themoviedb.org](https://www.themoviedb.org/settings/api)
 - **Jellyfin API key** — Te vinden in Jellyfin → Dashboard → API Keys
@@ -253,6 +242,12 @@ Stel je opslaglocatie in via **Instellingen → Storage & Paden**:
 ---
 
 ## 📦 Changelog
+
+### v1.2.0
+- 🔄 ffmpeg/ffprobe vervangen door mediainfo — kleinere image, één image voor alle functies
+- 🐛 Fix: actieve provider-verbinding door download queue bij wishlist
+- 🐛 Fix: kwaliteit niet getoond bij films zonder criteria
+- 🗑️ Dockerfile.wishlist verwijderd — `:wishlist` tag niet meer nodig
 
 ### v1.1.1
 - 🔍 Zoekbalk in Discover: zoek films en series via TMDB

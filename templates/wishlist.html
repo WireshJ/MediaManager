@@ -45,10 +45,6 @@
           <div>
             <h5 class="modal-title mb-0" id="sm-title"></h5>
             <p class="text-white-50 small mb-0 mt-1">Kies een beschikbare versie om te downloaden</p>
-            <div id="sm-found-info" class="mt-1" style="display:none">
-              <span class="badge bg-secondary me-1" id="sm-found-quality"></span>
-              <span class="badge bg-secondary" id="sm-found-langs"></span>
-            </div>
           </div>
         </div>
         <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -138,15 +134,13 @@ function renderList(items) {
       ? `<img src="${esc(item.poster)}" alt="${esc(item.title)}" class="wl-poster-img" loading="lazy">`
       : `<div class="wl-poster-placeholder">${item.type === "movie" ? "🎬" : "📺"}</div>`;
 
-    const fq = item.found_quality || "";
-    const fl = (item.found_langs || []).join(", ");
     const foundBadge = clickable
       ? `<div class="wl-found-hint">Klik voor opties</div>`
       : "";
 
     col.innerHTML = `
       <div class="wl-card${clickable ? ' wl-card-clickable' : ''}"
-           ${clickable ? `onclick="openStreams('${item.id}', '${esc(fq)}', '${esc(fl)}')"` : ""}>
+           ${clickable ? `onclick="openStreams('${item.id}')"` : ""}>
         <div class="wl-poster">
           ${poster}
           ${foundBadge}
@@ -169,27 +163,16 @@ function renderList(items) {
 // ── Streams modal ─────────────────────────────────────────────────
 let _currentWlId = null;
 
-async function openStreams(id, foundQuality, foundLangs) {
+async function openStreams(id) {
   _currentWlId = id;
   const modal = new bootstrap.Modal(document.getElementById("streamsModal"));
 
-  document.getElementById("sm-loading").style.display    = "";
-  document.getElementById("sm-empty").style.display      = "none";
-  document.getElementById("sm-list").style.display       = "none";
-  document.getElementById("sm-list").innerHTML           = "";
-  document.getElementById("sm-title").textContent        = "…";
-  document.getElementById("sm-poster").style.display     = "none";
-  document.getElementById("sm-found-info").style.display = "none";
-
-  if (foundQuality || foundLangs) {
-    const fq = document.getElementById("sm-found-quality");
-    const fl = document.getElementById("sm-found-langs");
-    fq.textContent = foundQuality ? `Gevonden: ${foundQuality}` : "";
-    fq.style.display = foundQuality ? "" : "none";
-    fl.textContent = foundLangs ? `Talen: ${foundLangs}` : "";
-    fl.style.display = foundLangs ? "" : "none";
-    document.getElementById("sm-found-info").style.display = "";
-  }
+  document.getElementById("sm-loading").style.display = "";
+  document.getElementById("sm-empty").style.display   = "none";
+  document.getElementById("sm-list").style.display    = "none";
+  document.getElementById("sm-list").innerHTML        = "";
+  document.getElementById("sm-title").textContent     = "…";
+  document.getElementById("sm-poster").style.display  = "none";
 
   modal.show();
 
@@ -220,13 +203,20 @@ async function openStreams(id, foundQuality, foundLangs) {
 
   d.streams.forEach(s => {
     const li = document.createElement("li");
-    li.className = "list-group-item bg-dark text-white border-secondary d-flex justify-content-between align-items-center";
+    li.className = "list-group-item bg-dark text-white border-secondary";
+    const qualityBadge = s.quality
+      ? `<span class="badge bg-secondary me-1">${esc(s.quality)}</span>` : "";
+    const langBadges = (s.langs || []).map(l =>
+      `<span class="badge bg-secondary me-1">${esc(l)}</span>`).join("");
     li.innerHTML = `
-      <span class="text-truncate me-2" style="max-width:75%">${esc(s.name)}</span>
-      <button class="btn btn-sm btn-outline-primary flex-shrink-0"
-              onclick="addStream('${id}', ${s.stream_id}, '${esc(s.ext)}', this)">
-        Maak .strm
-      </button>`;
+      <div class="d-flex justify-content-between align-items-center">
+        <span class="text-truncate me-2" style="max-width:70%">${esc(s.name)}</span>
+        <button class="btn btn-sm btn-outline-primary flex-shrink-0"
+                onclick="addStream('${id}', ${s.stream_id}, '${esc(s.ext)}', this)">
+          Maak .strm
+        </button>
+      </div>
+      ${qualityBadge || langBadges ? `<div class="mt-1">${qualityBadge}${langBadges}</div>` : ""}`;
     list.appendChild(li);
   });
 }

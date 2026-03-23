@@ -1,9 +1,9 @@
 FROM python:3.11-slim
 
-# Systeem dependencies: smbclient voor schijfruimte gauge, ffmpeg/ffprobe voor kwaliteitscheck
+# Systeem dependencies: smbclient voor SMB-opslag, mediainfo voor kwaliteitscheck
 RUN apt-get update && apt-get install -y \
     smbclient \
-    ffmpeg \
+    mediainfo \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -6,7 +6,7 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, f
 from pathlib import Path
 import requests as _requests
 
-__version__ = "1.1.1"
+__version__ = "1.2.0"
 
 app = Flask(__name__)
 
@@ -1880,30 +1880,37 @@ def _load_wishlist() -> list:
 def _save_wishlist(items: list) -> None:
     WISHLIST_FILE.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
 
-def _ffprobe_stream(url: str) -> dict:
-    """Haal kwaliteit en audiotracks op via ffprobe. Geeft {} bij fout."""
+def _probe_cache_path() -> Path:
+    return _cf("stream_probe_cache.json")
+
+def _load_probe_cache() -> dict:
     try:
-        cmd = [
-            "ffprobe", "-v", "quiet", "-print_format", "json",
-            "-show_streams", "-select_streams", "v:0", url
-        ]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        p = _probe_cache_path()
+        return json.loads(p.read_text()) if p.exists() else {}
+    except Exception:
+        return {}
+
+def _save_probe_cache(cache: dict) -> None:
+    try:
+        _probe_cache_path().write_text(json.dumps(cache))
+    except Exception:
+        pass
+
+def _ffprobe_stream(url: str) -> dict:
+    """Haal kwaliteit en audiotracks op via mediainfo. Geeft {} bij fout."""
+    try:
+        cmd = ["mediainfo", "--Output=JSON", url]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         data = json.loads(r.stdout) if r.stdout else {}
-        streams = data.get("streams", [])
         height = 0
-        if streams:
-            height = int(streams[0].get("height", 0) or 0)
-
-        # Audiotracks
-        cmd_audio = [
-            "ffprobe", "-v", "quiet", "-print_format", "json",
-            "-show_streams", "-select_streams", "a", url
-        ]
-        r2 = subprocess.run(cmd_audio, capture_output=True, text=True, timeout=20)
-        adata = json.loads(r2.stdout) if r2.stdout else {}
-        langs = [s.get("tags", {}).get("language", "") for s in adata.get("streams", [])]
-        langs = [l for l in langs if l]
-
+        langs  = []
+        for t in (data.get("media") or {}).get("track", []):
+            if t.get("@type") == "Video" and not height:
+                height = int(t.get("Height", 0) or 0)
+            elif t.get("@type") == "Audio":
+                lang = t.get("Language", "")
+                if lang:
+                    langs.append(lang)
         return {"height": height, "audio_langs": langs}
     except Exception:
         return {}
@@ -2014,36 +2021,48 @@ def _wishlist_worker():
                 changed = True
                 match = None
 
+                probe_cache = _load_probe_cache()
+                probe_cache_dirty = False
+
                 for cand in candidates:
                     sid = cand.get("stream_id") or cand.get("series_id")
                     ext = cand.get("container_extension", "mkv")
 
-                    if min_quality or wanted_lang:
+                    cache_key = str(sid)
+                    if cache_key in probe_cache:
+                        probe = probe_cache[cache_key]
+                    else:
                         if kind == "movie":
                             probe_url = f"{base}/movie/{x.get('user')}/{x.get('pwd')}/{sid}.{ext}"
                         else:
                             probe_url = f"{base}/series/{x.get('user')}/{x.get('pwd')}/{sid}.{ext}"
+                        probe = _ffprobe_stream(probe_url)
+                        probe_cache[cache_key] = probe
+                        probe_cache_dirty = True
 
-                        probe  = _ffprobe_stream(probe_url)
-                        height = probe.get("height", 0)
-                        langs  = probe.get("audio_langs", [])
+                    height = probe.get("height", 0)
+                    langs  = probe.get("audio_langs", [])
 
-                        item["found_quality"] = f"{height}p"
-                        item["found_langs"]   = langs
-                        if not _height_ok(height, min_quality):
-                            continue
-                        if not _lang_ok(langs, wanted_lang.lower()):
-                            continue
+                    item["found_quality"] = f"{height}p"
+                    item["found_langs"]   = langs
+
+                    if not _height_ok(height, min_quality):
+                        continue
+                    if not _lang_ok(langs, wanted_lang.lower()):
+                        continue
 
                     match = cand
                     break
+
+                if probe_cache_dirty:
+                    _save_probe_cache(probe_cache)
 
                 if not match:
                     # Geen enkele stream voldoet aan criteria
                     changed = True
                     continue
 
-                # Beste match gevonden — toevoegen aan download queue
+                # Beste match gevonden — .strm aanmaken in bibliotheek
                 stream_id = match.get("stream_id") or match.get("series_id")
                 title     = item.get("title", f"Item {stream_id}")
 
@@ -2053,8 +2072,7 @@ def _wishlist_worker():
                         ext = pick_ext(match.get("container_extension"), cfg["ext"]["movie"] or "mp4")
                         url = make_api(cfg).vod_url(stream_id, ext)
                         sb  = safe_fn(title)
-                        strm_path = storage_write_strm(f"{sub}/{sb}/{sb}.strm", url, cfg)
-                        download_queue.add([strm_path])
+                        storage_write_strm(f"{sub}/{sb}/{sb}.strm", url, cfg)
                     else:
                         sub  = storage_subdir(cfg, "series")
                         data = make_api(cfg).get_series_info(stream_id)
@@ -2068,11 +2086,10 @@ def _wishlist_worker():
                                 ext = pick_ext(ep.get("container_extension") or cfg["ext"]["episode"], "mp4")
                                 ep_url = make_api(cfg).episode_url(eid, ext)
                                 ep_name = f"{sb} S{sn:02d}E{en:02d}"
-                                strm_path = storage_write_strm(
+                                storage_write_strm(
                                     f"{sub}/{sb}/Season {sn:02d}/{ep_name}.strm", ep_url, cfg)
-                                download_queue.add([strm_path])
                 except Exception as ex:
-                    print(f"[wishlist] fout bij toevoegen queue voor {title}: {ex}")
+                    print(f"[wishlist] fout bij aanmaken strm voor {title}: {ex}")
                     continue
 
                 item["status"] = "toegevoegd_bibliotheek"
@@ -2178,13 +2195,18 @@ def api_wishlist_streams(item_id):
             key = "series_id"
 
         if cf.exists():
+            probe_cache = _load_probe_cache()
             for it in (json.loads(cf.read_text()).get("items") or []):
                 if str(it.get("tmdb") or "").strip() == tmdb_id:
+                    sid   = it.get(key) or it.get("stream_id")
+                    probe = probe_cache.get(str(sid), {})
                     streams.append({
-                        "stream_id": it.get(key) or it.get("stream_id"),
+                        "stream_id": sid,
                         "name":      it.get("name", ""),
                         "ext":       it.get("container_extension", "mkv"),
                         "icon":      it.get("stream_icon", ""),
+                        "quality":   f"{probe['height']}p" if probe.get("height") else None,
+                        "langs":     probe.get("audio_langs", []),
                     })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
