@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Wishlist – MediaManager{% endblock %}
+{% block content %}
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <h2 class="mb-0">🎯 Wishlist</h2>
+  <span id="wl-badge" class="badge bg-secondary" style="display:none"></span>
+</div>
+
+<p class="text-muted small mb-4">
+  Titels op de wishlist worden automatisch gecontroleerd op beschikbaarheid bij je provider.
+  Zodra een titel gevonden wordt en voldoet aan je kwaliteits- en taalvoorkeur, wordt hij automatisch toegevoegd aan de download queue.
+</p>
+
+<!-- ── Wishlist items ── -->
+<div id="wishlist-wrap">
+  <p class="text-muted" id="wl-empty">Wishlist is leeg. Voeg titels toe via Discover of Browse.</p>
+</div>
+
+<!-- ── Toast notificaties ── -->
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index:1100">
+  <div id="wl-toast-wrap"></div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const STATUS_LABELS = {
+  "wachtend":   '<span class="badge bg-secondary">⏳ Wachtend</span>',
+  "gevonden":   '<span class="badge bg-warning text-dark">🔍 Gevonden</span>',
+  "in_queue":   '<span class="badge bg-info text-dark">📥 In queue</span>',
+  "gedownload": '<span class="badge bg-success">✅ Gedownload</span>',
+  "fout":       '<span class="badge bg-danger">❌ Fout</span>',
+};
+
+function renderList(items) {
+  const wrap = document.getElementById("wishlist-wrap");
+  const empty = document.getElementById("wl-empty");
+  const badge = document.getElementById("wl-badge");
+
+  if (!items.length) {
+    empty.style.display = "";
+    wrap.innerHTML = "";
+    wrap.appendChild(empty);
+    badge.style.display = "none";
+    return;
+  }
+
+  empty.style.display = "none";
+  badge.textContent = items.length;
+  badge.style.display = "";
+
+  wrap.innerHTML = `
+    <div class="table-responsive">
+      <table class="table table-dark table-hover align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Titel</th>
+            <th>Type</th>
+            <th>Min. kwaliteit</th>
+            <th>Taal</th>
+            <th>Status</th>
+            <th>Toegevoegd</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="wl-tbody"></tbody>
+      </table>
+    </div>`;
+
+  const tbody = document.getElementById("wl-tbody");
+  items.forEach(item => {
+    const tr = document.createElement("tr");
+    const extra = item.found_quality ? ` <small class="text-muted">(${item.found_quality})</small>` :
+                  item.found_langs   ? ` <small class="text-muted">(${item.found_langs.join(", ")})</small>` : "";
+    tr.innerHTML = `
+      <td><strong>${escHtml(item.title)}</strong></td>
+      <td>${item.type === "movie" ? "🎬 Film" : "📺 Serie"}</td>
+      <td>${escHtml(item.min_quality || "—")}</td>
+      <td>${escHtml(item.language || "—")}</td>
+      <td>${STATUS_LABELS[item.status] || item.status}${extra}</td>
+      <td><small class="text-muted">${item.added_at || ""}</small></td>
+      <td>
+        <button class="btn btn-outline-danger btn-sm" onclick="deleteItem('${item.id}')">🗑</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+async function deleteItem(id) {
+  if (!confirm("Verwijderen van wishlist?")) return;
+  await fetch(`/api/wishlist/${id}`, {method:"DELETE"});
+  loadList();
+}
+
+async function loadList() {
+  const r = await fetch("/api/wishlist");
+  const d = await r.json();
+  if (d.ok) renderList(d.items);
+}
+
+async function checkNotifications() {
+  const r = await fetch("/api/wishlist/notifications");
+  const d = await r.json();
+  if (d.ok && d.notifications.length) {
+    d.notifications.forEach(n => showToast(n.title));
+  }
+}
+
+function showToast(title) {
+  const wrap = document.getElementById("wl-toast-wrap");
+  const id = "toast-" + Date.now();
+  const div = document.createElement("div");
+  div.id = id;
+  div.className = "toast align-items-center text-bg-success border-0 mb-2";
+  div.setAttribute("role","alert");
+  div.innerHTML = `
+    <div class="d-flex">
+      <div class="toast-body">✅ <strong>${escHtml(title)}</strong> toegevoegd aan download queue!</div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+    </div>`;
+  wrap.appendChild(div);
+  const t = new bootstrap.Toast(div, {delay: 6000});
+  t.show();
+  div.addEventListener("hidden.bs.toast", () => div.remove());
+}
+
+loadList();
+setInterval(loadList, 30000);
+setInterval(checkNotifications, 15000);
+</script>
+{% endblock %}

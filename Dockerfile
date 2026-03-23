@@ -1,8 +1,9 @@
 FROM python:3.11-slim
 
-# Systeem dependencies: smbclient voor schijfruimte gauge
+# Systeem dependencies: smbclient voor schijfruimte gauge, ffmpeg/ffprobe voor kwaliteitscheck
 RUN apt-get update && apt-get install -y \
     smbclient \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

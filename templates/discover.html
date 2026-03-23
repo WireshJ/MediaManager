@@ -107,6 +107,7 @@
     <div class="discover-hero-overview" id="hero-overview"></div>
     <div class="mt-3 d-flex gap-2 flex-wrap">
       <button class="btn btn-warning btn-sm fw-bold" id="hero-strm-btn">➕ .strm aanmaken</button>
+      <button class="btn btn-outline-info btn-sm" id="hero-wl-btn">🎯 Wishlist</button>
       <button class="btn btn-outline-light btn-sm" id="hero-info-btn">ℹ️ Info</button>
     </div>
   </div>
@@ -250,6 +251,7 @@ function setHero(idx) {
   const type = item.media_type === "tv" ? "series" : "movie";
   document.getElementById("hero-strm-btn").onclick = () => openDetail(item, type);
   document.getElementById("hero-info-btn").onclick = () => openDetail(item, type);
+  document.getElementById("hero-wl-btn").onclick   = () => addToWishlist(item.tmdb_id, item.title, type);
 }
 
 // ── Render rij ───────────────────────────────────────────────────
@@ -430,6 +432,18 @@ function mkBtn(label, cls, fn) {
 
 function esc(s) {
   return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// ── Wishlist ──────────────────────────────────────────────────────
+async function addToWishlist(tmdb_id, title, type) {
+  if (!tmdb_id) { showToast("❌ Geen TMDB ID beschikbaar", "error"); return; }
+  const r = await fetch("/api/wishlist", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({tmdb_id: String(tmdb_id), title, type})
+  }).then(r => r.json());
+  r.ok ? showToast(`🎯 "${esc(title)}" toegevoegd aan wishlist`, "success")
+       : showToast("❌ " + (r.error || "Fout"), "error");
 }
 
 // ── Browse voorinvullen via URL params ───────────────────────────

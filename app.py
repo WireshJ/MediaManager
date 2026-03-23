@@ -38,8 +38,9 @@ app.jinja_env.filters['display_name'] = lambda p: (
 # ── Paden ─────────────────────────────────────────────────────────
 BASE_DIR  = Path(__file__).parent
 DATA_DIR  = Path(os.environ.get("DATA_DIR", BASE_DIR / "data"))
-CONF_FILE = DATA_DIR / "config.json"
-CACHE_DIR = DATA_DIR / "cache"
+CONF_FILE     = DATA_DIR / "config.json"
+CACHE_DIR     = DATA_DIR / "cache"
+WISHLIST_FILE = DATA_DIR / "wishlist.json"
 for d in [DATA_DIR, CACHE_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
@@ -1813,6 +1814,246 @@ def api_test_opensubtitles():
     token=os_login(cfg)
     if token: return jsonify({"ok":True,"message":"OpenSubtitles login geslaagd"})
     return jsonify({"ok":False,"error":"Login mislukt – controleer credentials"})
+
+# ── Wishlist ───────────────────────────────────────────────────────
+
+def _load_wishlist() -> list:
+    try:
+        if WISHLIST_FILE.exists():
+            return json.loads(WISHLIST_FILE.read_text(encoding="utf-8"))
+    except Exception: pass
+    return []
+
+def _save_wishlist(items: list) -> None:
+    WISHLIST_FILE.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+
+def _ffprobe_stream(url: str) -> dict:
+    """Haal kwaliteit en audiotracks op via ffprobe. Geeft {} bij fout."""
+    try:
+        cmd = [
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_streams", "-select_streams", "v:0", url
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        data = json.loads(r.stdout) if r.stdout else {}
+        streams = data.get("streams", [])
+        height = 0
+        if streams:
+            height = int(streams[0].get("height", 0) or 0)
+
+        # Audiotracks
+        cmd_audio = [
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_streams", "-select_streams", "a", url
+        ]
+        r2 = subprocess.run(cmd_audio, capture_output=True, text=True, timeout=20)
+        adata = json.loads(r2.stdout) if r2.stdout else {}
+        langs = [s.get("tags", {}).get("language", "") for s in adata.get("streams", [])]
+        langs = [l for l in langs if l]
+
+        return {"height": height, "audio_langs": langs}
+    except Exception:
+        return {}
+
+_QUALITY_MAP = {"cam": 0, "480p": 480, "720p": 720, "1080p": 1080, "4k": 2160}
+
+def _height_ok(height: int, min_quality: str) -> bool:
+    min_h = _QUALITY_MAP.get((min_quality or "").lower(), 0)
+    return height >= min_h if min_h > 0 else True
+
+def _lang_ok(langs: list, wanted_lang: str) -> bool:
+    if not wanted_lang: return True
+    if not langs: return True   # geen taalinformatie = niet blokkeren
+    return wanted_lang.lower() in [l.lower() for l in langs]
+
+_wishlist_lock = threading.Lock()
+_wishlist_notifications: list = []   # toast berichten voor de UI
+
+def _wishlist_worker():
+    """Achtergrond-thread: controleert de wishlist periodiek."""
+    while True:
+        try:
+            cfg = load_conf()
+            interval = int(cfg.get("wishlist", {}).get("interval_hours", 1))
+            items = _load_wishlist()
+            changed = False
+
+            # Bouw provider-catalogus lookup op (TMDB ID → stream info)
+            movie_lookup: dict = {}
+            series_lookup: dict = {}
+            try:
+                mf = _cf("movies.json")
+                if mf.exists():
+                    for it in (json.loads(mf.read_text()).get("items") or []):
+                        tid = str(it.get("tmdb") or "").strip()
+                        if tid: movie_lookup[tid] = it
+            except Exception: pass
+            try:
+                sf = _cf("series.json")
+                if sf.exists():
+                    for it in (json.loads(sf.read_text()).get("items") or []):
+                        tid = str(it.get("tmdb") or "").strip()
+                        if tid: series_lookup[tid] = it
+            except Exception: pass
+
+            for item in items:
+                if item.get("status") in ("gedownload", "in_queue"):
+                    continue
+
+                tmdb_id  = str(item.get("tmdb_id", "")).strip()
+                kind     = item.get("type", "movie")
+                lookup   = movie_lookup if kind == "movie" else series_lookup
+                match    = lookup.get(tmdb_id)
+
+                if not match:
+                    item["status"] = "wachtend"
+                    changed = True
+                    continue
+
+                # Treffer gevonden — kwaliteits- en taalcheck via ffprobe
+                item["status"] = "gevonden"
+                changed = True
+
+                min_quality = item.get("min_quality", "")
+                wanted_lang = item.get("language", "")
+
+                if min_quality or wanted_lang:
+                    # Bouw stream URL op
+                    x = cfg.get("xtream", {})
+                    base = x.get("server","")
+                    if x.get("port") and str(x.get("port")) not in ["0","80","443"]:
+                        base = f"{base}:{x['port']}"
+                    sid  = match.get("stream_id") or match.get("series_id")
+                    ext  = match.get("container_extension","mkv")
+                    if kind == "movie":
+                        url = f"{base}/movie/{x.get('user')}/{x.get('pwd')}/{sid}.{ext}"
+                    else:
+                        url = f"{base}/series/{x.get('user')}/{x.get('pwd')}/{sid}.{ext}"
+
+                    probe = _ffprobe_stream(url)
+                    height = probe.get("height", 0)
+                    langs  = probe.get("audio_langs", [])
+
+                    if not _height_ok(height, min_quality):
+                        item["status"] = "gevonden"   # gevonden maar kwaliteit te laag
+                        item["found_quality"] = f"{height}p"
+                        changed = True
+                        continue
+
+                    if not _lang_ok(langs, wanted_lang):
+                        item["status"] = "gevonden"
+                        item["found_langs"] = langs
+                        changed = True
+                        continue
+
+                # Toevoegen aan download queue via bestaande strm logica
+                stream_id = match.get("stream_id") or match.get("series_id")
+                title     = item.get("title", f"Item {stream_id}")
+
+                try:
+                    if kind == "movie":
+                        sub = storage_subdir(cfg, "movies")
+                        ext = pick_ext(match.get("container_extension"), cfg["ext"]["movie"] or "mp4")
+                        url = make_api(cfg).vod_url(stream_id, ext)
+                        sb  = safe_fn(title)
+                        strm_path = storage_write_strm(f"{sub}/{sb}/{sb}.strm", url, cfg)
+                        DQ.add(strm_path, title)
+                    else:
+                        sub  = storage_subdir(cfg, "series")
+                        data = make_api(cfg).get_series_info(stream_id)
+                        eps  = data.get("episodes") or {}
+                        sb   = safe_fn(title)
+                        for sk, eplist in sorted(eps.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
+                            sn = int(sk) if str(sk).isdigit() else 0
+                            for ep in (eplist or []):
+                                en  = int(ep.get("episode_num") or ep.get("episode") or 0)
+                                eid = ep.get("id") or ep.get("episode_id") or ep.get("stream_id")
+                                ext = pick_ext(ep.get("container_extension") or cfg["ext"]["episode"], "mp4")
+                                ep_url = make_api(cfg).episode_url(eid, ext)
+                                ep_name = f"{sb} S{sn:02d}E{en:02d}"
+                                strm_path = storage_write_strm(
+                                    f"{sub}/{sb}/Season {sn:02d}/{ep_name}.strm", ep_url, cfg)
+                                DQ.add(strm_path, ep_name)
+                except Exception as ex:
+                    print(f"[wishlist] fout bij toevoegen queue voor {title}: {ex}")
+                    continue
+
+                item["status"] = "in_queue"
+                changed = True
+                with _wishlist_lock:
+                    _wishlist_notifications.append(
+                        {"title": title, "ts": datetime.datetime.now().isoformat(timespec="seconds")}
+                    )
+
+            if changed:
+                _save_wishlist(items)
+
+        except Exception as e:
+            print(f"[wishlist] fout: {e}")
+
+        time.sleep(interval * 3600)
+
+
+def _start_wishlist_thread():
+    t = threading.Thread(target=_wishlist_worker, daemon=True, name="wishlist")
+    t.start()
+
+# ── Wishlist API ───────────────────────────────────────────────────
+
+@app.get("/wishlist")
+def wishlist_page():
+    return render_template("wishlist.html", cfg=load_conf())
+
+@app.get("/api/wishlist")
+def api_wishlist_get():
+    return jsonify({"ok": True, "items": _load_wishlist()})
+
+@app.post("/api/wishlist")
+def api_wishlist_add():
+    p = request.get_json(force=True) or {}
+    tmdb_id     = str(p.get("tmdb_id","")).strip()
+    title       = (p.get("title") or "").strip()
+    kind        = p.get("type","movie")
+    min_quality = p.get("min_quality","")
+    language    = p.get("language","")
+
+    if not tmdb_id or not title:
+        return jsonify({"ok": False, "error": "tmdb_id en title zijn verplicht"}), 400
+
+    items = _load_wishlist()
+    if any(str(i.get("tmdb_id")) == tmdb_id and i.get("type") == kind for i in items):
+        return jsonify({"ok": False, "error": "Al op de wishlist"}), 409
+
+    items.append({
+        "id":          str(uuid.uuid4()),
+        "tmdb_id":     tmdb_id,
+        "title":       title,
+        "type":        kind,
+        "min_quality": min_quality,
+        "language":    language,
+        "status":      "wachtend",
+        "added_at":    datetime.datetime.now().isoformat(timespec="seconds"),
+    })
+    _save_wishlist(items)
+    return jsonify({"ok": True})
+
+@app.delete("/api/wishlist/<item_id>")
+def api_wishlist_delete(item_id):
+    items = _load_wishlist()
+    items = [i for i in items if i.get("id") != item_id]
+    _save_wishlist(items)
+    return jsonify({"ok": True})
+
+@app.get("/api/wishlist/notifications")
+def api_wishlist_notifications():
+    with _wishlist_lock:
+        notes = list(_wishlist_notifications)
+        _wishlist_notifications.clear()
+    return jsonify({"ok": True, "notifications": notes})
+
+# Start wishlist achtergrond-thread
+with app.app_context():
+    _start_wishlist_thread()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT","8080")), debug=False)

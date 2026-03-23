@@ -45,6 +45,12 @@
             <span id="nav-queue-badge" class="badge bg-warning text-dark ms-1" style="display:none"></span>
           </a>
         </li>
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint == 'wishlist_page' %}active{% endif %}"
+             href="{{ url_for('wishlist_page') }}">
+            🎯 Wishlist
+          </a>
+        </li>
       </ul>
       <ul class="navbar-nav ms-auto align-items-center gap-2">
         <li class="nav-item">
