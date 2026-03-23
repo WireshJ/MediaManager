@@ -75,12 +75,12 @@ function renderList(items) {
     const extra = item.found_quality ? ` <small class="text-muted">(${item.found_quality})</small>` :
                   item.found_langs   ? ` <small class="text-muted">(${item.found_langs.join(", ")})</small>` : "";
     tr.innerHTML = `
-      <td><strong>${escHtml(item.title)}</strong></td>
-      <td>${item.type === "movie" ? "🎬 Film" : "📺 Serie"}</td>
-      <td>${escHtml(item.min_quality || "—")}</td>
-      <td>${escHtml(item.language || "—")}</td>
+      <td><strong class="text-white">${escHtml(item.title)}</strong></td>
+      <td class="text-white-75">${item.type === "movie" ? "🎬 Film" : "📺 Serie"}</td>
+      <td class="text-white-75">${escHtml(item.min_quality || "—")}</td>
+      <td class="text-white-75">${escHtml(item.language || "—")}</td>
       <td>${STATUS_LABELS[item.status] || item.status}${extra}</td>
-      <td><small class="text-muted">${item.added_at || ""}</small></td>
+      <td><small class="text-white-50">${item.added_at || ""}</small></td>
       <td>
         <button class="btn btn-outline-danger btn-sm" onclick="deleteItem('${item.id}')">🗑</button>
       </td>`;

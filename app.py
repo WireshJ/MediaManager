@@ -26,7 +26,12 @@ app.config["SECRET_KEY"] = _load_secret_key()
 # ── Jinja2 globals ────────────────────────────────────────────────
 @app.context_processor
 def inject_globals():
-    return {"app_version": __version__}
+    cfg = load_conf()
+    return {
+        "app_version": __version__,
+        "cfg": cfg,
+        "wishlist_enabled": cfg.get("wishlist", {}).get("enabled", False),
+    }
 
 # ── Jinja2 filters ────────────────────────────────────────────────
 app.jinja_env.filters['basename'] = lambda p: Path(p).name
@@ -135,6 +140,7 @@ DEFAULT_CONF: Dict[str, Any] = {
     "tmdb":    {"enabled":False,"api_key":""},
     "opensubtitles":{"enabled":False,"api_key":"","username":"","password":"","langs":["nl","en"]},
     "app":     {"settings_password":""},  # leeg = geen beveiliging
+    "wishlist": {"enabled": False, "interval_hours": 1},
 }
 
 def _deep_merge(default: dict, saved: dict) -> dict:
@@ -1372,6 +1378,12 @@ def settings():
                 "langs":    langs,
             })
             global _os_token; _os_token = None
+        elif sec == "wishlist":
+            interval = request.form.get("wishlist_interval","1").strip()
+            cfg["wishlist"].update({
+                "enabled":        request.form.get("wishlist_enabled") == "on",
+                "interval_hours": int(interval) if interval.isdigit() else 1,
+            })
         elif sec == "app":
             new_pw      = request.form.get("new_password","").strip()
             confirm_pw  = request.form.get("confirm_password","").strip()
