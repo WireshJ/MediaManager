@@ -151,6 +151,7 @@ function renderList(items) {
           <div class="wl-card-title">${esc(item.title)}</div>
           <div class="wl-card-tags mt-2">
             ${statusTag(item.status)}
+            ${item.type === "series" ? `<span class="wl-tag wl-tag-series">Serie</span>` : ""}
             ${qualityTag(item.min_quality)}
             ${langTag(item.language)}
           </div>

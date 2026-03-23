@@ -294,6 +294,7 @@ body {
 .wl-tag-de       { background: #1a1200; color: #ffe066;  border: 1px solid #5a3e00; }
 .wl-tag-fr       { background: #1a001a; color: #e090ff;  border: 1px solid #4a0a4a; }
 .wl-tag-es       { background: #1a0a00; color: #ff9a5c;  border: 1px solid #5a2a00; }
+.wl-tag-series   { background: #1a0a2e; color: #c084fc;  border: 1px solid #4a1a7a; }
 
 /* Series grid */
 .series-grid {

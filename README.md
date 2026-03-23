@@ -243,6 +243,11 @@ Stel je opslaglocatie in via **Instellingen → Storage & Paden**:
 
 ## 📦 Changelog
 
+### v1.2.1
+- 🏷️ Serie-tag op wishlist kaartjes
+- 🐛 Fix: series met onbekende kwaliteit (`?`) werden geblokkeerd door kwaliteitscheck
+- 🧹 Probe cache opgeruimd bij verwijderen wishlist item
+
 ### v1.2.0
 - 🔄 ffmpeg/ffprobe vervangen door mediainfo — kleinere image, één image voor alle functies
 - 🐛 Fix: actieve provider-verbinding door download queue bij wishlist

@@ -6,7 +6,7 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, f
 from pathlib import Path
 import requests as _requests
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 app = Flask(__name__)
 
@@ -1919,7 +1919,9 @@ _QUALITY_MAP = {"cam": 0, "480p": 480, "720p": 720, "1080p": 1080, "4k": 2160}
 
 def _height_ok(height: int, min_quality: str) -> bool:
     min_h = _QUALITY_MAP.get((min_quality or "").lower(), 0)
-    return height >= min_h if min_h > 0 else True
+    if min_h == 0: return True   # geen criterium ingesteld
+    if height == 0: return False # onbekende kwaliteit + criterium ingesteld = niet auto-toevoegen
+    return height >= min_h
 
 _LANG_MAP = {"nl":"nld","en":"eng","de":"deu","fr":"fra","es":"spa"}
 
@@ -2043,7 +2045,7 @@ def _wishlist_worker():
                     height = probe.get("height", 0)
                     langs  = probe.get("audio_langs", [])
 
-                    item["found_quality"] = f"{height}p"
+                    item["found_quality"] = f"{height}p" if height else "?"
                     item["found_langs"]   = langs
 
                     if not _height_ok(height, min_quality):
@@ -2158,8 +2160,33 @@ def api_wishlist_add():
 @app.delete("/api/wishlist/<item_id>")
 def api_wishlist_delete(item_id):
     items = _load_wishlist()
+    item  = next((i for i in items if i.get("id") == item_id), None)
     items = [i for i in items if i.get("id") != item_id]
     _save_wishlist(items)
+
+    # Probe cache opruimen voor streams van dit TMDB ID,
+    # maar alleen als geen ander wishlist item hetzelfde TMDB ID heeft
+    if item:
+        tmdb_id   = str(item.get("tmdb_id", "")).strip()
+        kind      = item.get("type", "movie")
+        still_used = any(str(i.get("tmdb_id","")) == tmdb_id for i in items)
+        if tmdb_id and not still_used:
+            try:
+                cf  = _cf("movies.json" if kind == "movie" else "series.json")
+                key = "stream_id" if kind == "movie" else "series_id"
+                if cf.exists():
+                    data = json.loads(cf.read_text())
+                    sids = {str(it.get(key) or it.get("stream_id",""))
+                            for it in (data.get("items") or [])
+                            if str(it.get("tmdb","")).strip() == tmdb_id}
+                    if sids:
+                        cache = _load_probe_cache()
+                        for sid in sids:
+                            cache.pop(sid, None)
+                        _save_probe_cache(cache)
+            except Exception:
+                pass
+
     return jsonify({"ok": True})
 
 @app.post("/api/wishlist/check")
