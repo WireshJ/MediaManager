@@ -2024,6 +2024,7 @@ def api_wishlist_add():
     kind        = p.get("type","movie")
     min_quality = p.get("min_quality","")
     language    = p.get("language","")
+    poster      = (p.get("poster") or "").strip()
 
     if not tmdb_id or not title:
         return jsonify({"ok": False, "error": "tmdb_id en title zijn verplicht"}), 400
@@ -2039,6 +2040,7 @@ def api_wishlist_add():
         "type":        kind,
         "min_quality": min_quality,
         "language":    language,
+        "poster":      poster,
         "status":      "wachtend",
         "added_at":    datetime.datetime.now().isoformat(timespec="seconds"),
     })

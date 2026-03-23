@@ -293,7 +293,7 @@ function setHero(idx) {
   const type = item.media_type === "tv" ? "series" : "movie";
   document.getElementById("hero-strm-btn").onclick = () => openDetail(item, type);
   document.getElementById("hero-info-btn").onclick = () => openDetail(item, type);
-  document.getElementById("hero-wl-btn").onclick   = () => openWishlistModal(String(item.id||''), item.title, type);
+  document.getElementById("hero-wl-btn").onclick   = () => openWishlistModal(String(item.id||''), item.title, type, item.poster||'');
 }
 
 // ── Render rij ───────────────────────────────────────────────────
@@ -428,7 +428,7 @@ function openDetail(item, type) {
     wlBtn.textContent = "🎯 Wishlist";
     wlBtn.onclick = () => {
       bootstrap.Modal.getInstance(document.getElementById("detailModal"))?.hide();
-      openWishlistModal(String(item.id || ""), item.title, type);
+      openWishlistModal(String(item.id || ""), item.title, type, item.poster || "");
     };
     btnRow.appendChild(wlBtn);
   }
@@ -496,8 +496,8 @@ function esc(s) {
 // ── Wishlist ──────────────────────────────────────────────────────
 let _wlPending = null;
 
-function openWishlistModal(tmdb_id, title, type) {
-  _wlPending = {tmdb_id, title, type};
+function openWishlistModal(tmdb_id, title, type, poster) {
+  _wlPending = {tmdb_id, title, type, poster: poster || ""};
   document.getElementById("wl-modal-title").textContent = `"${title}"`;
   document.getElementById("wl-quality").value = "";
   document.getElementById("wl-lang").value = "";
@@ -507,14 +507,14 @@ function openWishlistModal(tmdb_id, title, type) {
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("wl-modal-confirm").addEventListener("click", async () => {
     if (!_wlPending) return;
-    const {tmdb_id, title, type} = _wlPending;
+    const {tmdb_id, title, type, poster} = _wlPending;
     const min_quality = document.getElementById("wl-quality").value;
     const language    = document.getElementById("wl-lang").value;
     bootstrap.Modal.getInstance(document.getElementById("wishlistModal"))?.hide();
     const r = await fetch("/api/wishlist", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({tmdb_id, title, type, min_quality, language})
+      body: JSON.stringify({tmdb_id, title, type, min_quality, language, poster})
     }).then(r => r.json());
     r.ok ? showToast(`🎯 "${esc(title)}" toegevoegd aan wishlist`, "success")
          : showToast("❌ " + (r.error || "Fout"), "error");
