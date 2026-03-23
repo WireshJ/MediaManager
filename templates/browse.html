@@ -175,13 +175,9 @@ async function loadMovies() {
       {title:"#",    render: it=>`<span class="text-muted font-mono">${it.stream_id}</span>`},
       {title:"Titel",render: it=>esc(it.name||"")},
       {title:"Ext",  render: it=>`<span class="font-mono text-muted">${it.container_extension||"mp4"}</span>`},
-    ], it=>`
-      <button class="btn btn-primary btn-sm btn-pill me-1"
+    ], it=>`<button class="btn btn-primary btn-sm btn-pill"
         onclick="genMovie(${it.stream_id},'${(it.name||'').replace(/'/g,"&#39;")}','${it.container_extension||''}')">
-        📁 .strm</button>
-      <button class="btn btn-outline-info btn-sm btn-pill" title="Toevoegen aan wishlist"
-        onclick="addToWishlist('${it.tmdb||''}','${(it.name||'').replace(/'/g,"&#39;")}','movie')">
-        🎯</button>`);
+        📁 .strm</button>`);
   } catch(e) { renderErr("tbl-movies", e.message); }
 }
 async function genMovie(id, title, ext) {
@@ -205,11 +201,8 @@ async function loadSeries() {
     ], it=>`
       <button class="btn btn-outline-secondary btn-sm btn-pill me-1"
               onclick="openSeriesDetail(${it.series_id},'${(it.name||'').replace(/'/g,"&#39;")}')">🔍 Details</button>
-      <button class="btn btn-primary btn-sm btn-pill me-1"
-              onclick="genSeries(${it.series_id})">📁 Alle .strm</button>
-      <button class="btn btn-outline-info btn-sm btn-pill" title="Toevoegen aan wishlist"
-              onclick="addToWishlist('${it.tmdb||''}','${(it.name||'').replace(/'/g,"&#39;")}','series')">
-              🎯</button>`);
+      <button class="btn btn-primary btn-sm btn-pill"
+              onclick="genSeries(${it.series_id})">📁 Alle .strm</button>`);
   } catch(e) { renderErr("tbl-series", e.message); }
 }
 async function openSeriesDetail(id, name) {
@@ -250,17 +243,6 @@ async function genSeries(id) {
     body:JSON.stringify({series_id:id})}).then(r=>r.json());
   d.ok ? showToast(`✅ ${d.count} .strm bestanden aangemaakt`,"success")
        : showToast("❌ "+d.error,"error");
-}
-
-async function addToWishlist(tmdb_id, title, type) {
-  if (!tmdb_id) { showToast("❌ Geen TMDB ID beschikbaar voor dit item", "error"); return; }
-  const r = await fetch("/api/wishlist", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({tmdb_id: String(tmdb_id), title, type})
-  }).then(r => r.json());
-  r.ok ? showToast(`🎯 "${esc(title)}" toegevoegd aan wishlist`, "success")
-       : showToast("❌ " + (r.error || "Fout"), "error");
 }
 
 async function refreshAll() {

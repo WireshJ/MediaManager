@@ -166,6 +166,46 @@
 
 </div>
 
+<!-- Wishlist modal -->
+<div class="modal fade" id="wishlistModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content" style="background:#1a1a1a;border:1px solid #333">
+      <div class="modal-header border-0 pb-0">
+        <h5 class="modal-title">🎯 Toevoegen aan Wishlist</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small mb-3" id="wl-modal-title"></p>
+        <div class="mb-3">
+          <label class="form-label small text-muted">Minimale kwaliteit</label>
+          <select class="form-select form-select-sm bg-dark text-white border-secondary" id="wl-quality">
+            <option value="">Geen voorkeur</option>
+            <option value="480p">480p</option>
+            <option value="720p">720p</option>
+            <option value="1080p">1080p</option>
+            <option value="4k">4K</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label small text-muted">Taalvoorkeur audiotrack</label>
+          <select class="form-select form-select-sm bg-dark text-white border-secondary" id="wl-lang">
+            <option value="">Geen voorkeur</option>
+            <option value="nl">Nederlands (nl)</option>
+            <option value="en">Engels (en)</option>
+            <option value="de">Duits (de)</option>
+            <option value="fr">Frans (fr)</option>
+            <option value="es">Spaans (es)</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer border-0 pt-0">
+        <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Annuleren</button>
+        <button type="button" class="btn btn-info btn-sm" id="wl-modal-confirm">🎯 Toevoegen</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Detail modal -->
 <div class="modal fade" id="detailModal" tabindex="-1">
   <div class="modal-dialog modal-lg modal-dialog-centered">
@@ -251,7 +291,7 @@ function setHero(idx) {
   const type = item.media_type === "tv" ? "series" : "movie";
   document.getElementById("hero-strm-btn").onclick = () => openDetail(item, type);
   document.getElementById("hero-info-btn").onclick = () => openDetail(item, type);
-  document.getElementById("hero-wl-btn").onclick   = () => addToWishlist(item.tmdb_id, item.title, type);
+  document.getElementById("hero-wl-btn").onclick   = () => openWishlistModal(String(item.tmdb_id||''), item.title, type);
 }
 
 // ── Render rij ───────────────────────────────────────────────────
@@ -278,6 +318,8 @@ function renderRow(id, items, showRank=false, showRankNum=false) {
     card.innerHTML = `
       ${img}
       ${rank}${rating}
+      <button class="poster-wl-btn" title="Toevoegen aan wishlist"
+        onclick="event.stopPropagation();openWishlistModal('${String(item.tmdb_id||'')}','${esc(item.title).replace(/'/g,"&#39;")}','${type}')">🎯</button>
       <div class="poster-info">
         <div class="poster-title">${esc(item.title)}</div>
         <div class="poster-meta">${item.year || ""}</div>
@@ -435,16 +477,33 @@ function esc(s) {
 }
 
 // ── Wishlist ──────────────────────────────────────────────────────
-async function addToWishlist(tmdb_id, title, type) {
-  if (!tmdb_id) { showToast("❌ Geen TMDB ID beschikbaar", "error"); return; }
-  const r = await fetch("/api/wishlist", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({tmdb_id: String(tmdb_id), title, type})
-  }).then(r => r.json());
-  r.ok ? showToast(`🎯 "${esc(title)}" toegevoegd aan wishlist`, "success")
-       : showToast("❌ " + (r.error || "Fout"), "error");
+let _wlPending = null;
+
+function openWishlistModal(tmdb_id, title, type) {
+  _wlPending = {tmdb_id, title, type};
+  document.getElementById("wl-modal-title").textContent = `"${title}"`;
+  document.getElementById("wl-quality").value = "";
+  document.getElementById("wl-lang").value = "";
+  new bootstrap.Modal(document.getElementById("wishlistModal")).show();
 }
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("wl-modal-confirm").addEventListener("click", async () => {
+    if (!_wlPending) return;
+    const {tmdb_id, title, type} = _wlPending;
+    const min_quality = document.getElementById("wl-quality").value;
+    const language    = document.getElementById("wl-lang").value;
+    bootstrap.Modal.getInstance(document.getElementById("wishlistModal"))?.hide();
+    const r = await fetch("/api/wishlist", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({tmdb_id, title, type, min_quality, language})
+    }).then(r => r.json());
+    r.ok ? showToast(`🎯 "${esc(title)}" toegevoegd aan wishlist`, "success")
+         : showToast("❌ " + (r.error || "Fout"), "error");
+    _wlPending = null;
+  });
+});
 
 // ── Browse voorinvullen via URL params ───────────────────────────
 window.addEventListener("DOMContentLoaded", () => {
