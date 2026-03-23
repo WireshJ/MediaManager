@@ -140,7 +140,7 @@ DEFAULT_CONF: Dict[str, Any] = {
     "tmdb":    {"enabled":False,"api_key":""},
     "opensubtitles":{"enabled":False,"api_key":"","username":"","password":"","langs":["nl","en"]},
     "app":     {"settings_password":""},  # leeg = geen beveiliging
-    "wishlist": {"enabled": False},
+    "wishlist": {"enabled": False, "languages": ["en", "nl"]},
 }
 
 def _deep_merge(default: dict, saved: dict) -> dict:
@@ -1380,6 +1380,7 @@ def settings():
             global _os_token; _os_token = None
         elif sec == "wishlist":
             cfg["wishlist"]["enabled"] = request.form.get("wishlist_enabled") == "on"
+            cfg["wishlist"]["languages"] = request.form.getlist("wishlist_languages") or []
         elif sec == "app":
             new_pw      = request.form.get("new_password","").strip()
             confirm_pw  = request.form.get("confirm_password","").strip()
@@ -1928,10 +1929,11 @@ def _wishlist_worker():
                         del data
                 except Exception: pass
 
-            x    = cfg.get("xtream", {})
-            base = x.get("server", "")
+            x            = cfg.get("xtream", {})
+            base         = x.get("server", "")
             if x.get("port") and str(x.get("port")) not in ["0", "80", "443"]:
                 base = f"{base}:{x['port']}"
+            global_langs = [l.upper() for l in cfg.get("wishlist", {}).get("languages", [])]
 
             for item in items:
                 if item.get("status") in ("toegevoegd_bibliotheek", "gedownload", "in_queue"):
@@ -1948,18 +1950,20 @@ def _wishlist_worker():
                     continue
 
                 # Streams sorteren: gewenste taal vooraan op basis van naam-prefix
-                min_quality = item.get("min_quality", "")
-                wanted_lang = item.get("language", "").upper()
+                min_quality    = item.get("min_quality", "")
+                wanted_lang    = item.get("language", "").upper()
+                # Als item geen taalvoorkeur heeft, gebruik globale taalvoorkeur uit settings
+                effective_langs = [wanted_lang] if wanted_lang else global_langs
 
                 def _stream_score(s):
                     name = s.get("name", "").upper()
-                    lang_hit = wanted_lang and (
-                        name.startswith(wanted_lang + " ") or
-                        name.startswith(wanted_lang + "-") or
-                        f"- {wanted_lang} " in name or
-                        f"- {wanted_lang}\t" in name
-                    )
-                    return (0 if lang_hit else 1)
+                    for i, lang in enumerate(effective_langs):
+                        if (name.startswith(lang + " ") or
+                                name.startswith(lang + "-") or
+                                f"- {lang} " in name or
+                                f"- {lang}\t" in name):
+                            return i
+                    return len(effective_langs)
 
                 candidates = sorted(candidates, key=_stream_score)
 
@@ -1972,7 +1976,7 @@ def _wishlist_worker():
                     sid = cand.get("stream_id") or cand.get("series_id")
                     ext = cand.get("container_extension", "mkv")
 
-                    if min_quality or wanted_lang:
+                    if min_quality or wanted_lang or effective_langs:
                         if kind == "movie":
                             probe_url = f"{base}/movie/{x.get('user')}/{x.get('pwd')}/{sid}.{ext}"
                         else:
@@ -1986,8 +1990,12 @@ def _wishlist_worker():
                         item["found_langs"]   = langs
                         if not _height_ok(height, min_quality):
                             continue
-                        if not _lang_ok(langs, wanted_lang.lower()):
-                            continue
+                        if wanted_lang:
+                            if not _lang_ok(langs, wanted_lang.lower()):
+                                continue
+                        elif effective_langs:
+                            if not any(_lang_ok(langs, l.lower()) for l in effective_langs):
+                                continue
 
                     match = cand
                     break
