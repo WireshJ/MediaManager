@@ -32,6 +32,14 @@
             🔥 Discover
           </a>
         </li>
+        {% if wishlist_enabled %}
+        <li class="nav-item">
+          <a class="nav-link {% if request.endpoint == 'wishlist_page' %}active{% endif %}"
+             href="{{ url_for('wishlist_page') }}">
+            🎯 Wishlist
+          </a>
+        </li>
+        {% endif %}
         <li class="nav-item">
           <a class="nav-link {% if request.endpoint == 'library' %}active{% endif %}"
              href="{{ url_for('library') }}">
@@ -45,14 +53,6 @@
             <span id="nav-queue-badge" class="badge bg-warning text-dark ms-1" style="display:none"></span>
           </a>
         </li>
-        {% if wishlist_enabled %}
-        <li class="nav-item">
-          <a class="nav-link {% if request.endpoint == 'wishlist_page' %}active{% endif %}"
-             href="{{ url_for('wishlist_page') }}">
-            🎯 Wishlist
-          </a>
-        </li>
-        {% endif %}
       </ul>
       <ul class="navbar-nav ms-auto align-items-center gap-2">
         <li class="nav-item">
