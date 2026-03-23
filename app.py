@@ -1983,6 +1983,9 @@ _wishlist_wake  = threading.Event()  # wekt de worker vroegtijdig op
 
 def _wishlist_worker():
     """Achtergrond-thread: controleert de wishlist periodiek."""
+    interval          = 6   # fallback als load_conf() faalt
+    probe_cache       = {}
+    probe_cache_dirty = False
     while True:
         try:
             cfg = load_conf()
@@ -1993,9 +1996,7 @@ def _wishlist_worker():
             # Niets te doen → cache niet inladen
             active = [i for i in items if i.get("status") not in ("toegevoegd_bibliotheek", "gedownload", "in_queue")]
             if not active:
-                _wishlist_wake.wait(timeout=interval * 3600)
-                _wishlist_wake.clear()
-                continue
+                continue  # finally handelt de sleep af
 
             # Films: laad movies.json, filter, ruim op
             movie_lookup: dict = {}
@@ -2032,6 +2033,9 @@ def _wishlist_worker():
             if x.get("port") and str(x.get("port")) not in ["0", "80", "443"]:
                 base = f"{base}:{x['port']}"
 
+            probe_cache       = _load_probe_cache()
+            probe_cache_dirty = False
+
             for item in items:
                 if item.get("status") in ("toegevoegd_bibliotheek", "gedownload", "in_queue"):
                     continue
@@ -2042,8 +2046,9 @@ def _wishlist_worker():
                 candidates  = lookup.get(tmdb_id, [])
 
                 if not candidates:
-                    item["status"] = "wachtend"
-                    changed = True
+                    if item.get("status") != "wachtend":
+                        item["status"] = "wachtend"
+                        changed = True
                     continue
 
                 # Streams sorteren: gewenste taal vooraan op basis van naam-prefix
@@ -2063,15 +2068,17 @@ def _wishlist_worker():
                 candidates = sorted(candidates, key=_stream_score)
 
                 # Eerste stream die aan kwaliteit + taal voldoet gebruiken
-                item["status"] = "gevonden"
-                changed = True
+                if item.get("status") != "gevonden":
+                    item["status"] = "gevonden"
+                    changed = True
                 match = None
-
-                probe_cache = _load_probe_cache()
-                probe_cache_dirty = False
+                best_quality = "?"
+                best_langs   = []
 
                 for cand in candidates:
                     sid = cand.get("stream_id") or cand.get("series_id")
+                    if not sid:
+                        continue
                     ext = cand.get("container_extension", "mkv")
 
                     cache_key = str(sid)
@@ -2091,8 +2098,10 @@ def _wishlist_worker():
                     height = probe.get("height", 0)
                     langs  = probe.get("audio_langs", [])
 
-                    item["found_quality"] = f"{height}p" if height else "?"
-                    item["found_langs"]   = langs
+                    # Beste bekende kwaliteit bijhouden voor weergave op kaart
+                    if height and (best_quality == "?" or height > int(best_quality.rstrip("p") or 0)):
+                        best_quality = f"{height}p"
+                        best_langs   = langs
 
                     if not _height_ok(height, min_quality):
                         continue
@@ -2100,14 +2109,15 @@ def _wishlist_worker():
                         continue
 
                     match = cand
+                    best_quality = f"{height}p" if height else "?"
+                    best_langs   = langs
                     break
 
-                if probe_cache_dirty:
-                    _save_probe_cache(probe_cache)
+                item["found_quality"] = best_quality
+                item["found_langs"]   = best_langs
 
                 if not match:
                     # Geen enkele stream voldoet aan criteria
-                    changed = True
                     continue
 
                 # Beste match gevonden — .strm aanmaken in bibliotheek
@@ -2152,19 +2162,49 @@ def _wishlist_worker():
                         {"title": title, "ts": datetime.datetime.now().isoformat(timespec="seconds")}
                     )
 
+            if probe_cache_dirty:
+                _save_probe_cache(probe_cache)
+                probe_cache_dirty = False
+
             if changed:
-                _save_wishlist(items)
+                # Herlaad van disk en merge om concurrent API-wijzigingen
+                # (bijv. verwijderd item) niet te overschrijven
+                current    = _load_wishlist()
+                current_by_id = {i["id"]: i for i in current}
+                for item in items:
+                    if item["id"] in current_by_id:
+                        current_by_id[item["id"]] = item
+                _save_wishlist(list(current_by_id.values()))
 
         except Exception as e:
             print(f"[wishlist] fout: {e}")
+            if probe_cache_dirty:
+                _save_probe_cache(probe_cache)
         finally:
             _wishlist_wake.wait(timeout=interval * 3600)
             _wishlist_wake.clear()
 
 
+def _cache_refresh_worker():
+    """Achtergrond-thread: ververst movies.json en series.json periodiek."""
+    while True:
+        try:
+            cfg      = load_conf()
+            interval = int(cfg.get("cache", {}).get("ttl_hours", 6))
+            x        = cfg.get("xtream", {})
+            if x.get("server") and x.get("user") and x.get("pwd"):
+                _gor("movies.json", interval, lambda: {"items": make_api(cfg).get_vod_streams()})
+                _gor("series.json", interval, lambda: {"items": make_api(cfg).get_series()})
+                print(f"[cache] movies.json / series.json gecontroleerd (TTL {interval}u)")
+        except Exception as e:
+            print(f"[cache] fout bij verversen: {e}")
+        time.sleep(3600)  # controleer elk uur of TTL verlopen is
+
+
 def _start_wishlist_thread():
     t = threading.Thread(target=_wishlist_worker, daemon=True, name="wishlist")
     t.start()
+    threading.Thread(target=_cache_refresh_worker, daemon=True, name="cache-refresh").start()
 
 # ── Wishlist API ───────────────────────────────────────────────────
 
