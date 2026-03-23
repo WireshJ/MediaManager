@@ -1893,23 +1893,40 @@ def _wishlist_worker():
             items = _load_wishlist()
             changed = False
 
-            # Bouw provider-catalogus lookup op (TMDB ID → lijst van streams)
+            # Niets te doen → cache niet inladen
+            active = [i for i in items if i.get("status") not in ("toegevoegd_bibliotheek", "gedownload", "in_queue")]
+            if not active:
+                continue
+
+            # Films: laad movies.json, filter, ruim op
             movie_lookup: dict = {}
+            need_movies = {str(i["tmdb_id"]) for i in active if i.get("type", "movie") == "movie"}
+            if need_movies:
+                try:
+                    mf = _cf("movies.json")
+                    if mf.exists():
+                        data = json.loads(mf.read_text())
+                        for it in (data.get("items") or []):
+                            tid = str(it.get("tmdb") or "").strip()
+                            if tid in need_movies:
+                                movie_lookup.setdefault(tid, []).append(it)
+                        del data
+                except Exception: pass
+
+            # Series: laad series.json, filter, ruim op
             series_lookup: dict = {}
-            try:
-                mf = _cf("movies.json")
-                if mf.exists():
-                    for it in (json.loads(mf.read_text()).get("items") or []):
-                        tid = str(it.get("tmdb") or "").strip()
-                        if tid: movie_lookup.setdefault(tid, []).append(it)
-            except Exception: pass
-            try:
-                sf = _cf("series.json")
-                if sf.exists():
-                    for it in (json.loads(sf.read_text()).get("items") or []):
-                        tid = str(it.get("tmdb") or "").strip()
-                        if tid: series_lookup.setdefault(tid, []).append(it)
-            except Exception: pass
+            need_series = {str(i["tmdb_id"]) for i in active if i.get("type") == "series"}
+            if need_series:
+                try:
+                    sf = _cf("series.json")
+                    if sf.exists():
+                        data = json.loads(sf.read_text())
+                        for it in (data.get("items") or []):
+                            tid = str(it.get("tmdb") or "").strip()
+                            if tid in need_series:
+                                series_lookup.setdefault(tid, []).append(it)
+                        del data
+                except Exception: pass
 
             x    = cfg.get("xtream", {})
             base = x.get("server", "")
