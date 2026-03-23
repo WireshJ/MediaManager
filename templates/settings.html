@@ -293,6 +293,12 @@
     </div>
   </div>
 
+  <!-- ══ FEATURES HEADING ══════════════════════════════════════ -->
+  <div class="col-12">
+    <h5 class="text-white-50 mb-0 mt-2">🔌 Integraties & Features</h5>
+    <hr class="border-secondary mt-2 mb-0">
+  </div>
+
   <!-- ══ JELLYFIN ══════════════════════════════════════════════ -->
   <div class="col-lg-6">
     <div class="settings-card optional-card">
@@ -420,39 +426,31 @@
     </div>
   </div>
 
-  <!-- ══ BEVEILIGING ═══════════════════════════════════════════ -->
-  <div class="col-12">
-    <div class="settings-card">
   <!-- ══ WISHLIST ═══════════════════════════════════════════════ -->
-  <div class="col-12">
-    <div class="settings-card">
+  <div class="col-lg-6">
+    <div class="settings-card optional-card">
       <div class="settings-card-header">
         <div class="d-flex align-items-center gap-2">
           <span class="settings-icon">🎯</span>
           <div>
             <h5 class="mb-0">Wishlist</h5>
-            <small class="text-muted">Automatisch downloaden als een titel beschikbaar komt</small>
+            <small class="text-white-50">Automatisch downloaden als een titel beschikbaar komt</small>
           </div>
         </div>
-        {% if cfg.get('wishlist', {}).get('enabled', False) %}
-        <span class="badge bg-success">Ingeschakeld</span>
-        {% else %}
-        <span class="badge bg-secondary">Uitgeschakeld</span>
-        {% endif %}
+        <div class="form-check form-switch mb-0">
+          <input class="form-check-input" type="checkbox" id="wl-toggle" name="wishlist_enabled_toggle"
+                 {% if cfg.get('wishlist', {}).get('enabled', False) %}checked{% endif %}
+                 onchange="document.getElementById('wl_eh').value=this.checked?'on':''">
+          <label class="form-check-label text-white-50" for="wl-toggle">Ingeschakeld</label>
+        </div>
       </div>
       <form method="POST">
         <input type="hidden" name="section" value="wishlist">
+        <input type="hidden" name="wishlist_enabled" id="wl_eh" value="{{ 'on' if cfg.get('wishlist', {}).get('enabled', False) else '' }}">
         <div class="row g-3">
           <div class="col-12">
-            <div class="form-check form-switch">
-              <input class="form-check-input" type="checkbox" name="wishlist_enabled" id="wishlist_enabled"
-                     {% if cfg.get('wishlist', {}).get('enabled', False) %}checked{% endif %}>
-              <label class="form-check-label" for="wishlist_enabled">
-                Wishlist inschakelen
-                <small class="text-muted ms-2">Vereist ffmpeg/ffprobe — gebruik het <code>:wishlist</code> Docker image</small>
-              </label>
-            </div>
-            <div class="form-text text-muted mt-1">De wishlist wordt automatisch gecontroleerd op hetzelfde interval als de Xtream API cache (instelbaar bij Xtream API → Cache TTL).</div>
+            <p class="text-white-50 small mb-1">Vereist ffmpeg/ffprobe — gebruik het <code>:wishlist</code> Docker image.</p>
+            <p class="text-white-50 small mb-0">De wishlist wordt automatisch gecontroleerd op hetzelfde interval als de Xtream API cache (instelbaar bij Xtream API → Cache TTL).</p>
           </div>
           <div class="col-12">
             <button type="submit" class="btn btn-primary">💾 Opslaan</button>
@@ -460,6 +458,12 @@
         </div>
       </form>
     </div>
+  </div>
+
+  <!-- ══ BEVEILIGING HEADING ═════════════════════════════════════ -->
+  <div class="col-12">
+    <h5 class="text-white-50 mb-0 mt-2">🔒 Beveiliging</h5>
+    <hr class="border-secondary mt-2 mb-0">
   </div>
 
   <!-- ══ BEVEILIGING ══════════════════════════════════════════════ -->
