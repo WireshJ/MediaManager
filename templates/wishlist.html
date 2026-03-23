@@ -3,8 +3,17 @@
 {% block content %}
 
 <div class="d-flex align-items-center justify-content-between mb-4">
-  <h2 class="mb-0">🎯 Wishlist</h2>
-  <span id="wl-badge" class="badge bg-secondary" style="display:none"></span>
+  <div class="d-flex align-items-center gap-3">
+    <h2 class="mb-0">🎯 Wishlist</h2>
+    <span id="wl-badge" class="badge bg-secondary" style="display:none"></span>
+  </div>
+  <button class="btn btn-outline-secondary btn-sm" onclick="refreshCache()">
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" class="me-1">
+      <path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/>
+      <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/>
+    </svg>
+    Cache vernieuwen
+  </button>
 </div>
 
 <p class="text-white-50 small mb-4">
@@ -27,14 +36,38 @@
 
 {% block scripts %}
 <script>
-const STATUS_LABELS = {
-  "wachtend":               '<span class="badge bg-secondary">⏳ Wachtend</span>',
-  "gevonden":               '<span class="badge bg-warning text-dark">🔍 Gevonden</span>',
-  "in_queue":               '<span class="badge bg-info text-dark">📥 In queue</span>',
-  "toegevoegd_bibliotheek": '<span class="badge bg-success">✅ In bibliotheek</span>',
-  "gedownload":             '<span class="badge bg-success">✅ Gedownload</span>',
-  "fout":                   '<span class="badge bg-danger">❌ Fout</span>',
+// ── Status tags ───────────────────────────────────────────────────
+const STATUS_TAGS = {
+  "wachtend":               { label:"Wachtend",       cls:"wl-tag-waiting" },
+  "gevonden":               { label:"Gevonden",        cls:"wl-tag-found"   },
+  "in_queue":               { label:"In queue",        cls:"wl-tag-queue"   },
+  "toegevoegd_bibliotheek": { label:"In bibliotheek",  cls:"wl-tag-done"    },
+  "gedownload":             { label:"Gedownload",      cls:"wl-tag-done"    },
+  "fout":                   { label:"Fout",            cls:"wl-tag-error"   },
 };
+
+// ── Kwaliteit kleuren ─────────────────────────────────────────────
+const QUALITY_CLS = { "4k":"wl-tag-4k", "1080p":"wl-tag-1080", "720p":"wl-tag-720", "480p":"wl-tag-480", "cam":"wl-tag-cam" };
+
+// ── Taal kleuren ──────────────────────────────────────────────────
+const LANG_CLS = { "nl":"wl-tag-nl", "en":"wl-tag-en", "de":"wl-tag-de", "fr":"wl-tag-fr", "es":"wl-tag-es" };
+
+function statusTag(status) {
+  const s = STATUS_TAGS[status] || { label: status, cls: "wl-tag-waiting" };
+  return `<span class="wl-tag ${s.cls}">${s.label}</span>`;
+}
+
+function qualityTag(q) {
+  if (!q) return "";
+  const cls = QUALITY_CLS[(q||"").toLowerCase()] || "wl-tag-480";
+  return `<span class="wl-tag ${cls}">${esc(q)}</span>`;
+}
+
+function langTag(l) {
+  if (!l) return "";
+  const cls = LANG_CLS[(l||"").toLowerCase()] || "wl-tag-en";
+  return `<span class="wl-tag ${cls}">${esc(l.toUpperCase())}</span>`;
+}
 
 function esc(s) {
   return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
@@ -58,30 +91,26 @@ function renderList(items) {
   wrap.innerHTML = "";
 
   items.forEach(item => {
-    const col  = document.createElement("div");
+    const col = document.createElement("div");
     col.className = "col-6 col-sm-4 col-md-3 col-lg-2";
 
     const poster = item.poster
       ? `<img src="${esc(item.poster)}" alt="${esc(item.title)}" class="wl-poster-img" loading="lazy">`
       : `<div class="wl-poster-placeholder">${item.type === "movie" ? "🎬" : "📺"}</div>`;
 
-    const extra = item.found_quality ? `<br><small class="text-white-50">${esc(item.found_quality)}</small>`
-                : item.found_langs   ? `<br><small class="text-white-50">${item.found_langs.join(", ")}</small>` : "";
-
-    const meta = [];
-    if (item.min_quality) meta.push(esc(item.min_quality));
-    if (item.language)    meta.push(esc(item.language));
-
     col.innerHTML = `
       <div class="wl-card">
         <div class="wl-poster">
           ${poster}
-          <button class="wl-delete-btn" title="Verwijderen" onclick="deleteItem('${item.id}')">✕</button>
+          <button class="wl-delete-btn" title="Verwijderen van wishlist" onclick="deleteItem('${item.id}')">✕</button>
         </div>
         <div class="wl-card-info">
           <div class="wl-card-title">${esc(item.title)}</div>
-          <div class="wl-card-meta">${meta.join(" · ") || ""}</div>
-          <div class="mt-1">${STATUS_LABELS[item.status] || item.status}${extra}</div>
+          <div class="wl-card-tags mt-2">
+            ${statusTag(item.status)}
+            ${qualityTag(item.min_quality)}
+            ${langTag(item.language)}
+          </div>
         </div>
       </div>`;
     wrap.appendChild(col);
@@ -94,6 +123,16 @@ async function deleteItem(id) {
   loadList();
 }
 
+async function refreshCache() {
+  const btn = event.currentTarget;
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span> Bezig…`;
+  await fetch("/api/refresh?scope=all", {method:"POST"});
+  btn.disabled = false;
+  btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16" class="me-1"><path fill-rule="evenodd" d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/><path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/></svg> Cache vernieuwen`;
+  showToast("✅ Cache vernieuwd");
+}
+
 async function loadList() {
   const r = await fetch("/api/wishlist");
   const d = await r.json();
@@ -104,23 +143,23 @@ async function checkNotifications() {
   const r = await fetch("/api/wishlist/notifications");
   const d = await r.json();
   if (d.ok && d.notifications.length) {
-    d.notifications.forEach(n => showToast(n.title));
+    d.notifications.forEach(n => showToast(`✅ ${n.title} toegevoegd aan de bibliotheek!`));
     loadList();
   }
 }
 
-function showToast(title) {
+function showToast(msg) {
   const wrap = document.getElementById("wl-toast-wrap");
   const div  = document.createElement("div");
   div.className = "toast align-items-center text-bg-success border-0 mb-2";
   div.setAttribute("role","alert");
   div.innerHTML = `
     <div class="d-flex">
-      <div class="toast-body">✅ <strong>${esc(title)}</strong> toegevoegd aan de bibliotheek!</div>
+      <div class="toast-body">${esc(msg)}</div>
       <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
     </div>`;
   wrap.appendChild(div);
-  const t = new bootstrap.Toast(div, {delay: 6000});
+  const t = new bootstrap.Toast(div, {delay: 5000});
   t.show();
   div.addEventListener("hidden.bs.toast", () => div.remove());
 }
