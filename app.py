@@ -1407,12 +1407,7 @@ def settings():
             flash("Instellingen opgeslagen.","success")
         return redirect(url_for("settings"))
 
-    account_info = None
-    x = cfg.get("xtream",{})
-    if x.get("server") and x.get("user") and x.get("pwd"):
-        try: account_info = make_api(cfg).get_user_info()
-        except Exception: pass
-    return render_template("settings.html", cfg=cfg, account_info=account_info,
+    return render_template("settings.html", cfg=cfg, account_info=None,
                            settings_locked=_settings_locked(cfg))
 
 @app.get("/browse")
@@ -1700,6 +1695,26 @@ def api_discover():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+_account_info_cache: dict = {"data": None, "ts": 0}
+_ACCOUNT_INFO_TTL = 30  # seconden
+
+@app.get("/api/account-info")
+def api_account_info():
+    cfg = load_conf()
+    x   = cfg.get("xtream", {})
+    if not (x.get("server") and x.get("user") and x.get("pwd")):
+        return jsonify({"ok": False, "error": "Niet geconfigureerd"})
+    now = time.time()
+    if _account_info_cache["data"] and now - _account_info_cache["ts"] < _ACCOUNT_INFO_TTL:
+        return jsonify({"ok": True, "info": _account_info_cache["data"]})
+    try:
+        info = make_api(cfg).get_user_info()
+        _account_info_cache["data"] = info
+        _account_info_cache["ts"]   = now
+        return jsonify({"ok": True, "info": info})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
 @app.post("/api/test/xtream")
 def api_test_xtream():
     try:
@@ -1870,31 +1885,47 @@ def api_test_opensubtitles():
 
 # ── Wishlist ───────────────────────────────────────────────────────
 
+_wishlist_file_lock = threading.Lock()
+_probe_cache_lock   = threading.Lock()
+
 def _load_wishlist() -> list:
-    try:
-        if WISHLIST_FILE.exists():
-            return json.loads(WISHLIST_FILE.read_text(encoding="utf-8"))
-    except Exception: pass
-    return []
+    with _wishlist_file_lock:
+        try:
+            if WISHLIST_FILE.exists():
+                return json.loads(WISHLIST_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return []
 
 def _save_wishlist(items: list) -> None:
-    WISHLIST_FILE.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+    with _wishlist_file_lock:
+        try:
+            tmp = WISHLIST_FILE.with_suffix(".tmp")
+            tmp.write_text(json.dumps(items, indent=2, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(WISHLIST_FILE)
+        except Exception as e:
+            print(f"[wishlist] ERROR: opslaan mislukt: {e}")
 
 def _probe_cache_path() -> Path:
     return _cf("stream_probe_cache.json")
 
 def _load_probe_cache() -> dict:
-    try:
-        p = _probe_cache_path()
-        return json.loads(p.read_text()) if p.exists() else {}
-    except Exception:
-        return {}
+    with _probe_cache_lock:
+        try:
+            p = _probe_cache_path()
+            return json.loads(p.read_text()) if p.exists() else {}
+        except Exception:
+            return {}
 
 def _save_probe_cache(cache: dict) -> None:
-    try:
-        _probe_cache_path().write_text(json.dumps(cache))
-    except Exception:
-        pass
+    with _probe_cache_lock:
+        try:
+            p   = _probe_cache_path()
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(json.dumps(cache))
+            tmp.replace(p)
+        except Exception as e:
+            print(f"[wishlist] ERROR: probe cache opslaan mislukt: {e}")
 
 def _ffprobe_stream(url: str) -> dict:
     """Haal kwaliteit en audiotracks op via mediainfo. Geeft {} bij fout."""
@@ -2039,8 +2070,10 @@ def _wishlist_worker():
                         else:
                             probe_url = f"{base}/series/{x.get('user')}/{x.get('pwd')}/{sid}.{ext}"
                         probe = _ffprobe_stream(probe_url)
-                        probe_cache[cache_key] = probe
-                        probe_cache_dirty = True
+                        # Alleen cachen als probe iets zinvols opleverde
+                        if probe.get("height") or probe.get("audio_langs"):
+                            probe_cache[cache_key] = probe
+                            probe_cache_dirty = True
 
                     height = probe.get("height", 0)
                     langs  = probe.get("audio_langs", [])
@@ -2069,15 +2102,20 @@ def _wishlist_worker():
                 title     = item.get("title", f"Item {stream_id}")
 
                 try:
+                    api = make_api(cfg)
                     if kind == "movie":
                         sub = storage_subdir(cfg, "movies")
                         ext = pick_ext(match.get("container_extension"), cfg["ext"]["movie"] or "mp4")
-                        url = make_api(cfg).vod_url(stream_id, ext)
+                        url = api.vod_url(stream_id, ext)
                         sb  = safe_fn(title)
                         storage_write_strm(f"{sub}/{sb}/{sb}.strm", url, cfg)
                     else:
                         sub  = storage_subdir(cfg, "series")
-                        data = make_api(cfg).get_series_info(stream_id)
+                        try:
+                            data = api.get_series_info(stream_id)
+                        except Exception as ex:
+                            print(f"[wishlist] provider fout bij ophalen serie info voor {title}: {ex}")
+                            continue
                         eps  = data.get("episodes") or {}
                         sb   = safe_fn(title)
                         for sk, eplist in sorted(eps.items(), key=lambda kv: int(kv[0]) if str(kv[0]).isdigit() else 0):
@@ -2086,7 +2124,7 @@ def _wishlist_worker():
                                 en  = int(ep.get("episode_num") or ep.get("episode") or 0)
                                 eid = ep.get("id") or ep.get("episode_id") or ep.get("stream_id")
                                 ext = pick_ext(ep.get("container_extension") or cfg["ext"]["episode"], "mp4")
-                                ep_url = make_api(cfg).episode_url(eid, ext)
+                                ep_url = api.episode_url(eid, ext)
                                 ep_name = f"{sb} S{sn:02d}E{en:02d}"
                                 storage_write_strm(
                                     f"{sub}/{sb}/Season {sn:02d}/{ep_name}.strm", ep_url, cfg)
@@ -2106,9 +2144,9 @@ def _wishlist_worker():
 
         except Exception as e:
             print(f"[wishlist] fout: {e}")
-
-        _wishlist_wake.wait(timeout=interval * 3600)
-        _wishlist_wake.clear()
+        finally:
+            _wishlist_wake.wait(timeout=interval * 3600)
+            _wishlist_wake.clear()
 
 
 def _start_wishlist_thread():

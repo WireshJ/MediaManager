@@ -303,7 +303,10 @@ function showToast(msg) {
 }
 
 loadList();
-setInterval(loadList, 30000);
-setInterval(checkNotifications, 15000);
+const _wlIntervals = [
+  setInterval(loadList, 30000),
+  setInterval(checkNotifications, 15000)
+];
+window.addEventListener('pagehide', () => _wlIntervals.forEach(clearInterval));
 </script>
 {% endblock %}
