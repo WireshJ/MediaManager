@@ -2062,13 +2062,13 @@ def _wishlist_worker():
                     ext = cand.get("container_extension", "mkv")
 
                     cache_key = str(sid)
-                    if cache_key in probe_cache:
+                    if kind == "series":
+                        # Series-URL's zijn niet probeerbaar (episode-ID nodig)
+                        probe = {}
+                    elif cache_key in probe_cache:
                         probe = probe_cache[cache_key]
                     else:
-                        if kind == "movie":
-                            probe_url = f"{base}/movie/{x.get('user')}/{x.get('pwd')}/{sid}.{ext}"
-                        else:
-                            probe_url = f"{base}/series/{x.get('user')}/{x.get('pwd')}/{sid}.{ext}"
+                        probe_url = f"{base}/movie/{x.get('user')}/{x.get('pwd')}/{sid}.{ext}"
                         probe = _ffprobe_stream(probe_url)
                         # Alleen cachen als probe iets zinvols opleverde
                         if probe.get("height") or probe.get("audio_langs"):

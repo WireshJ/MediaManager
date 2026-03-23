@@ -32,21 +32,24 @@ Download films en series rechtstreeks naar je NAS, met automatische Jellyfin int
 
 ## 🎯 Wishlist
 
-Voeg films en series toe aan de wishlist vanuit Discover. De app controleert automatisch of de titel beschikbaar is bij je provider en voldoet aan je kwaliteits- en taalvoorkeur.
+Voeg films en series toe aan de wishlist vanuit Discover. De app controleert automatisch of de titel beschikbaar is bij je provider.
 
 ### Hoe werkt het?
 
 1. Klik op een film/serie in **Discover** → knop **Wishlist** in het detailvenster
-2. Kies een minimale kwaliteit (bijv. `1080p`) en/of gewenste taal (bijv. `EN`)
+2. Kies een minimale kwaliteit en/of gewenste taal *(alleen van toepassing op films)*
 3. De achtergrond-worker controleert periodiek alle wishlist-items
 4. Zodra een match gevonden wordt die aan de criteria voldoet → automatisch toegevoegd aan de bibliotheek
+
+> **Films** worden gecheckt op kwaliteit (bijv. minimaal `1080p`) en taal (bijv. `NL`).
+> **Series** worden alleen gecheckt op aanwezigheid — kwaliteit en taal zijn niet controleerbaar via de provider-URL.
 
 ### Statussen
 
 | Status | Betekenis |
 |--------|-----------|
 | ⏳ **Wachtend** | Nog niet gevonden bij de provider |
-| 🔍 **Gevonden** | Beschikbaar maar kwaliteit/taal voldoet nog niet |
+| 🔍 **Gevonden** | Beschikbaar bij de provider — voor films: kwaliteit/taal voldoet nog niet aan criteria; voor series: klik op de poster om handmatig een versie te kiezen |
 | ✅ **In bibliotheek** | Toegevoegd en klaar |
 
 ### Handmatig toevoegen
