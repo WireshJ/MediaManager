@@ -1407,7 +1407,20 @@ def settings():
             flash("Instellingen opgeslagen.","success")
         return redirect(url_for("settings"))
 
-    return render_template("settings.html", cfg=cfg, account_info=None,
+    account_info = None
+    x = cfg.get("xtream", {})
+    if x.get("server") and x.get("user") and x.get("pwd"):
+        now = time.time()
+        if _account_info_cache["data"] and now - _account_info_cache["ts"] < _ACCOUNT_INFO_TTL:
+            account_info = _account_info_cache["data"]
+        else:
+            try:
+                account_info = make_api(cfg).get_user_info()
+                _account_info_cache["data"] = account_info
+                _account_info_cache["ts"]   = now
+            except Exception:
+                pass
+    return render_template("settings.html", cfg=cfg, account_info=account_info,
                            settings_locked=_settings_locked(cfg))
 
 @app.get("/browse")

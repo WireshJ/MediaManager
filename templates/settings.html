@@ -19,34 +19,38 @@
             <small class="text-white-50">Verbinding met je IPTV provider</small>
           </div>
         </div>
-        <div id="account-badge" style="display:none" class="account-badge">
-          <span id="ab-dot" class="badge-dot"></span>
-          <span id="ab-status">–</span>
+        {% if account_info %}
+        <div class="account-badge">
+          <span class="badge-dot {% if account_info.status == 'Active' %}active{% else %}inactive{% endif %}"></span>
+          <span>{{ account_info.status or '–' }}</span>
         </div>
+        {% endif %}
       </div>
 
-      <div id="account-info-bar" class="account-info-bar mb-4" style="display:none">
+      {% if account_info %}
+      <div class="account-info-bar mb-4">
         <div class="ai-item">
           <span class="ai-label">Status</span>
-          <span id="ai-status" class="ai-value">–</span>
+          <span class="ai-value">{{ account_info.status or '–' }}</span>
         </div>
         <div class="ai-item">
           <span class="ai-label">Verloopt op</span>
-          <span id="ai-exp" class="ai-value">–</span>
+          <span class="ai-value" id="exp-date" data-ts="{{ account_info.exp_date or 0 }}">–</span>
         </div>
         <div class="ai-item">
           <span class="ai-label">Actieve verbindingen</span>
-          <span id="ai-cons" class="ai-value">–</span>
+          <span class="ai-value">{{ account_info.active_cons or '0' }}</span>
         </div>
         <div class="ai-item">
           <span class="ai-label">Max verbindingen</span>
-          <span id="ai-max" class="ai-value">–</span>
+          <span class="ai-value">{{ account_info.max_connections or '–' }}</span>
         </div>
         <div class="ai-item">
           <span class="ai-label">Trial account</span>
-          <span id="ai-trial" class="ai-value">–</span>
+          <span class="ai-value">{{ 'Ja' if account_info.is_trial == '1' else 'Nee' }}</span>
         </div>
       </div>
+      {% endif %}
 
       <form method="POST">
         <input type="hidden" name="section" value="xtream">
@@ -552,35 +556,13 @@ async function testConn(service) {
   } catch(e) { showToast(`❌ Verzoek mislukt: ${e.message}`,'error'); }
 }
 
-async function loadAccountInfo() {
-  try {
-    const d = await fetch('/api/account-info').then(r => r.json());
-    const badge = document.getElementById('account-badge');
-    const bar   = document.getElementById('account-info-bar');
-    if (!d.ok || !d.info) { badge.style.display = 'none'; bar.style.display = 'none'; return; }
-    const info = d.info;
-    const auth = info.user_info || info;
-
-    const status = auth.status || '–';
-    document.getElementById('ab-dot').className = 'badge-dot' + (status === 'Active' ? ' dot-active' : ' dot-inactive');
-    document.getElementById('ab-status').textContent = status;
-    badge.style.display = '';
-
-    const exp = parseInt(auth.exp_date || auth.expiration_date || 0);
-    document.getElementById('ai-status').textContent = status;
-    document.getElementById('ai-exp').textContent = exp > 0
-      ? new Date(exp * 1000).toLocaleDateString('nl-NL', {day:'2-digit', month:'2-digit', year:'numeric'})
-      : '–';
-    document.getElementById('ai-cons').textContent = auth.active_cons ?? auth.active_connections ?? '–';
-    document.getElementById('ai-max').textContent  = auth.max_connections ?? '–';
-    document.getElementById('ai-trial').textContent = auth.is_trial === '1' || auth.is_trial === true ? 'Ja' : 'Nee';
-    bar.style.display = '';
-  } catch(e) { /* stille fout */ }
-}
-
 document.addEventListener('DOMContentLoaded', () => {
-  loadAccountInfo();
-  setInterval(loadAccountInfo, 15000);
+  const el = document.getElementById('exp-date');
+  if (el) {
+    const ts = parseInt(el.dataset.ts);
+    if (ts > 0) el.textContent = new Date(ts * 1000).toLocaleDateString('nl-NL',
+      {day:'2-digit', month:'2-digit', year:'numeric'});
+  }
 });
 </script>
 {% endblock %}
