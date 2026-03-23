@@ -27,11 +27,12 @@
 {% block scripts %}
 <script>
 const STATUS_LABELS = {
-  "wachtend":   '<span class="badge bg-secondary">⏳ Wachtend</span>',
-  "gevonden":   '<span class="badge bg-warning text-dark">🔍 Gevonden</span>',
-  "in_queue":   '<span class="badge bg-info text-dark">📥 In queue</span>',
-  "gedownload": '<span class="badge bg-success">✅ Gedownload</span>',
-  "fout":       '<span class="badge bg-danger">❌ Fout</span>',
+  "wachtend":              '<span class="badge bg-secondary">⏳ Wachtend</span>',
+  "gevonden":              '<span class="badge bg-warning text-dark">🔍 Gevonden</span>',
+  "in_queue":              '<span class="badge bg-info text-dark">📥 In queue</span>',
+  "toegevoegd_bibliotheek":'<span class="badge bg-success">✅ Toegevoegd aan bibliotheek</span>',
+  "gedownload":            '<span class="badge bg-success">✅ Gedownload</span>',
+  "fout":                  '<span class="badge bg-danger">❌ Fout</span>',
 };
 
 function renderList(items) {

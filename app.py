@@ -140,7 +140,7 @@ DEFAULT_CONF: Dict[str, Any] = {
     "tmdb":    {"enabled":False,"api_key":""},
     "opensubtitles":{"enabled":False,"api_key":"","username":"","password":"","langs":["nl","en"]},
     "app":     {"settings_password":""},  # leeg = geen beveiliging
-    "wishlist": {"enabled": False, "interval_hours": 1},
+    "wishlist": {"enabled": False},
 }
 
 def _deep_merge(default: dict, saved: dict) -> dict:
@@ -1379,11 +1379,7 @@ def settings():
             })
             global _os_token; _os_token = None
         elif sec == "wishlist":
-            interval = request.form.get("wishlist_interval","1").strip()
-            cfg["wishlist"].update({
-                "enabled":        request.form.get("wishlist_enabled") == "on",
-                "interval_hours": int(interval) if interval.isdigit() else 1,
-            })
+            cfg["wishlist"]["enabled"] = request.form.get("wishlist_enabled") == "on"
         elif sec == "app":
             new_pw      = request.form.get("new_password","").strip()
             confirm_pw  = request.form.get("confirm_password","").strip()
@@ -1886,7 +1882,7 @@ def _wishlist_worker():
     while True:
         try:
             cfg = load_conf()
-            interval = int(cfg.get("wishlist", {}).get("interval_hours", 1))
+            interval = int(cfg.get("cache", {}).get("ttl_hours", 6))
             items = _load_wishlist()
             changed = False
 
@@ -1909,7 +1905,7 @@ def _wishlist_worker():
             except Exception: pass
 
             for item in items:
-                if item.get("status") in ("gedownload", "in_queue"):
+                if item.get("status") in ("toegevoegd_bibliotheek", "gedownload", "in_queue"):
                     continue
 
                 tmdb_id  = str(item.get("tmdb_id", "")).strip()
@@ -1990,7 +1986,7 @@ def _wishlist_worker():
                     print(f"[wishlist] fout bij toevoegen queue voor {title}: {ex}")
                     continue
 
-                item["status"] = "in_queue"
+                item["status"] = "toegevoegd_bibliotheek"
                 changed = True
                 with _wishlist_lock:
                     _wishlist_notifications.append(

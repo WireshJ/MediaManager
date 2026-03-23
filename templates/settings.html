@@ -449,14 +449,10 @@
                      {% if cfg.get('wishlist', {}).get('enabled', False) %}checked{% endif %}>
               <label class="form-check-label" for="wishlist_enabled">
                 Wishlist inschakelen
-                <small class="text-muted ms-2">Vereist ffmpeg/ffprobe in de Docker container</small>
+                <small class="text-muted ms-2">Vereist ffmpeg/ffprobe — gebruik het <code>:wishlist</code> Docker image</small>
               </label>
             </div>
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Check interval (uren)</label>
-            <input type="number" class="form-control" name="wishlist_interval" min="1" max="24"
-                   value="{{ cfg.get('wishlist', {}).get('interval_hours', 1) }}">
+            <div class="form-text text-muted mt-1">De wishlist wordt automatisch gecontroleerd op hetzelfde interval als de Xtream API cache (instelbaar bij Xtream API → Cache TTL).</div>
           </div>
           <div class="col-12">
             <button type="submit" class="btn btn-primary">💾 Opslaan</button>
