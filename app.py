@@ -1232,6 +1232,8 @@ class DownloadQueue:
             print(f"[!] Kan .strm niet lezen via {proto}: {ex}")
         return None
 
+    _YTDLP_TIMEOUT = 4 * 3600  # 4 uur max per download
+
     def _ytdlp(self, url, output, e):
         cmd = [
             "yt-dlp",
@@ -1249,6 +1251,16 @@ class DownloadQueue:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     text=True, bufsize=8192)
             self._proc = proc
+
+            # Watchdog: kill het process na 4 uur als het vastloopt
+            def _watchdog():
+                try:
+                    proc.wait(timeout=self._YTDLP_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    print(f"[download] timeout na {self._YTDLP_TIMEOUT//3600}u — process geforceerd gestopt")
+                    proc.kill()
+            threading.Thread(target=_watchdog, daemon=True).start()
+
             for line in proc.stdout:
                 line = line.strip()
                 if "|" in line:
@@ -1942,7 +1954,7 @@ def _save_probe_cache(cache: dict) -> None:
         except Exception as e:
             print(f"[wishlist] ERROR: probe cache opslaan mislukt: {e}")
 
-def _ffprobe_stream(url: str) -> dict:
+def _probe_stream(url: str) -> dict:
     """Haal kwaliteit en audiotracks op via mediainfo. Geeft {} bij fout."""
     try:
         cmd = ["mediainfo", "--Output=JSON", url]
@@ -2030,7 +2042,7 @@ def _wishlist_worker():
     while True:
         try:
             cfg = load_conf()
-            interval = int(cfg.get("cache", {}).get("ttl_hours", 6))
+            interval = max(1, int(cfg.get("cache", {}).get("ttl_hours", 6) or 6))
             items = _load_wishlist()
             changed = False
 
@@ -2134,7 +2146,7 @@ def _wishlist_worker():
                         probe = probe_cache[cache_key]
                     else:
                         probe_url = f"{base}/movie/{x.get('user')}/{x.get('pwd')}/{sid}.{ext}"
-                        probe = _ffprobe_stream(probe_url)
+                        probe = _probe_stream(probe_url)
                         # Alleen cachen als probe iets zinvols opleverde
                         if probe.get("height") or probe.get("audio_langs"):
                             probe_cache[cache_key] = probe
@@ -2239,7 +2251,7 @@ def _cache_refresh_worker():
     while True:
         try:
             cfg      = load_conf()
-            interval = int(cfg.get("cache", {}).get("ttl_hours", 6))
+            interval = max(1, int(cfg.get("cache", {}).get("ttl_hours", 6) or 6))
             x        = cfg.get("xtream", {})
             if x.get("server") and x.get("user") and x.get("pwd"):
                 _gor("movies.json", interval, lambda: {"items": make_api(cfg).get_vod_streams()})
