@@ -460,6 +460,40 @@
             </div>
             <p class="text-white-50 small mt-2 mb-0">Bepaalt welke taalopties beschikbaar zijn bij het toevoegen aan de wishlist.</p>
           </div>
+          <!-- Kwaliteitsmatch modus -->
+          <div class="col-12">
+            <label class="form-label text-white-50 small mb-1">
+              Kwaliteitsmatch
+              <span tabindex="0" data-bs-toggle="tooltip" data-bs-placement="right"
+                    title="High: alleen exacte resoluties (720p/1080p/2160p). Medium: inclusief widescreen varianten (bijv. 1600p telt als 4K, 800p als 1080p). Low: ruimere drempel, ook lagere encodes van dezelfde kwaliteitsklasse."
+                    style="cursor:help; font-size:.85em;">ℹ️</span>
+            </label>
+            <select class="form-select form-select-sm bg-dark text-white border-secondary"
+                    name="wishlist_quality_mode" style="max-width:220px">
+              {% set qmode = cfg.get('wishlist', {}).get('quality_mode', 'medium') %}
+              <option value="high"   {% if qmode == 'high'   %}selected{% endif %}>Hoog — exacte resoluties</option>
+              <option value="medium" {% if qmode == 'medium' %}selected{% endif %}>Medium — inclusief widescreen</option>
+              <option value="low"    {% if qmode == 'low'    %}selected{% endif %}>Laag — ruime drempel</option>
+            </select>
+          </div>
+
+          <!-- Blokkeer onbekende talen -->
+          <div class="col-12">
+            <div class="d-flex align-items-center gap-2">
+              <div class="form-check form-switch mb-0">
+                <input class="form-check-input" type="checkbox" id="wl-block-lang"
+                       name="wishlist_block_unknown_lang"
+                       {% if cfg.get('wishlist', {}).get('block_unknown_lang', False) %}checked{% endif %}>
+                <label class="form-check-label text-white-50" for="wl-block-lang">
+                  Blokkeer streams met onbekende taal
+                </label>
+              </div>
+              <span tabindex="0" data-bs-toggle="tooltip" data-bs-placement="right"
+                    title="Aan: als een stream geen taalmetadata heeft én de taal niet uit de naam valt op te maken (bijv. 'AMZ - Titel'), wordt hij niet automatisch toegevoegd. Je kunt hem dan handmatig kiezen. Uit: streams zonder taalinfo worden altijd geaccepteerd."
+                    style="cursor:help; font-size:.85em;">ℹ️</span>
+            </div>
+          </div>
+
           <div class="col-12">
             <button type="submit" class="btn btn-primary">💾 Opslaan</button>
           </div>
@@ -563,6 +597,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if (ts > 0) el.textContent = new Date(ts * 1000).toLocaleDateString('nl-NL',
       {day:'2-digit', month:'2-digit', year:'numeric'});
   }
+});
+
+// Bootstrap tooltips
+document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(el => {
+  new bootstrap.Tooltip(el);
 });
 </script>
 {% endblock %}

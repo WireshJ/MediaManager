@@ -75,9 +75,7 @@
 const STATUS_TAGS = {
   "wachtend":               { label:"Wachtend",       cls:"wl-tag-waiting" },
   "gevonden":               { label:"Gevonden",        cls:"wl-tag-found"   },
-  "in_queue":               { label:"In queue",        cls:"wl-tag-queue"   },
   "toegevoegd_bibliotheek": { label:"In bibliotheek",  cls:"wl-tag-done"    },
-  "gedownload":             { label:"Gedownload",      cls:"wl-tag-done"    },
   "fout":                   { label:"Fout",            cls:"wl-tag-error"   },
 };
 
@@ -235,7 +233,7 @@ async function addStream(wlId, streamId, ext, btn) {
 
   if (d.ok) {
     bootstrap.Modal.getInstance(document.getElementById("streamsModal")).hide();
-    showToast("✅ Toegevoegd aan de download queue!");
+    showToast("✅ .strm aangemaakt in de bibliotheek!");
     loadList();
   } else {
     btn.disabled = false;

@@ -6,7 +6,7 @@ Download films en series rechtstreeks naar je NAS, met automatische Jellyfin int
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![Flask](https://img.shields.io/badge/Flask-3.0-000000?logo=flask)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Version](https://img.shields.io/badge/version-1.2.1-blue)
+![Version](https://img.shields.io/badge/version-1.2.2-blue)
 
 ---
 
@@ -245,6 +245,14 @@ Stel je opslaglocatie in via **Instellingen → Storage & Paden**:
 ---
 
 ## 📦 Changelog
+
+### v1.2.2
+- ⚙️ Kwaliteitsmatch instelling: Hoog / Medium / Laag (widescreen-aware drempels)
+- ⚙️ Taalinstelling: blokkeer streams met onbekende taal (optioneel)
+- 🔍 Taal-fallback: taal wordt ook uit streamnaam-prefix gehaald als metadata ontbreekt
+- 🐛 Fix: `in_queue` status verwijderd (dode code)
+- 🐛 Fix: notificatielijst beperkt tot maximaal 20 items
+- 🐛 Fix: melding bij handmatig .strm aanmaken was incorrect
 
 ### v1.2.1
 - 🏷️ Serie-tag op wishlist kaartjes

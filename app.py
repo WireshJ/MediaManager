@@ -6,7 +6,7 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, f
 from pathlib import Path
 import requests as _requests
 
-__version__ = "1.2.1"
+__version__ = "1.2.2"
 
 app = Flask(__name__)
 
@@ -140,7 +140,7 @@ DEFAULT_CONF: Dict[str, Any] = {
     "tmdb":    {"enabled":False,"api_key":""},
     "opensubtitles":{"enabled":False,"api_key":"","username":"","password":"","langs":["nl","en"]},
     "app":     {"settings_password":""},  # leeg = geen beveiliging
-    "wishlist": {"enabled": False, "languages": ["en", "nl"]},
+    "wishlist": {"enabled": False, "languages": ["en", "nl"], "quality_mode": "medium", "block_unknown_lang": False},
 }
 
 def _deep_merge(default: dict, saved: dict) -> dict:
@@ -1379,8 +1379,10 @@ def settings():
             })
             global _os_token; _os_token = None
         elif sec == "wishlist":
-            cfg["wishlist"]["enabled"] = request.form.get("wishlist_enabled") == "on"
-            cfg["wishlist"]["languages"] = request.form.getlist("wishlist_languages") or []
+            cfg["wishlist"]["enabled"]           = request.form.get("wishlist_enabled") == "on"
+            cfg["wishlist"]["languages"]          = request.form.getlist("wishlist_languages") or []
+            cfg["wishlist"]["quality_mode"]       = request.form.get("wishlist_quality_mode", "medium")
+            cfg["wishlist"]["block_unknown_lang"] = request.form.get("wishlist_block_unknown_lang") == "on"
         elif sec == "app":
             new_pw      = request.form.get("new_password","").strip()
             confirm_pw  = request.form.get("confirm_password","").strip()
@@ -1959,23 +1961,62 @@ def _ffprobe_stream(url: str) -> dict:
     except Exception:
         return {}
 
-_QUALITY_MAP = {"cam": 0, "480p": 480, "720p": 720, "1080p": 1080, "4k": 2160}
+# Kwaliteitsdrempels per modus (high/medium/low).
+# high   = alleen exacte standaard resoluties (16:9)
+# medium = inclusief widescreen varianten (bijv. 1600p = 4K cinemascope)
+# low    = ruime drempel, ook lagere encodes accepteren
+_QUALITY_THRESHOLDS = {
+    "4k":    {"high": 2160, "medium": 1440, "low": 1080},
+    "1080p": {"high": 1080, "medium": 800,  "low": 600},
+    "720p":  {"high": 720,  "medium": 520,  "low": 360},
+    "480p":  {"high": 480,  "medium": 360,  "low": 240},
+    "cam":   {"high": 0,    "medium": 0,    "low": 0},
+}
 
-def _height_ok(height: int, min_quality: str) -> bool:
-    min_h = _QUALITY_MAP.get((min_quality or "").lower(), 0)
-    if min_h == 0: return True   # geen criterium ingesteld
-    if height == 0: return False # onbekende kwaliteit + criterium ingesteld = niet auto-toevoegen
+def _height_ok(height: int, min_quality: str, quality_mode: str = "medium") -> bool:
+    key = (min_quality or "").lower()
+    if key not in _QUALITY_THRESHOLDS: return True   # geen criterium ingesteld
+    min_h = _QUALITY_THRESHOLDS[key].get(quality_mode, _QUALITY_THRESHOLDS[key]["medium"])
+    if min_h == 0: return True
+    if height == 0: return False  # onbekende kwaliteit + criterium ingesteld = niet auto-toevoegen
     return height >= min_h
 
 _LANG_MAP = {"nl":"nld","en":"eng","de":"deu","fr":"fra","es":"spa"}
 
-def _lang_ok(langs: list, wanted_lang: str) -> bool:
+def _lang_from_name(stream_name: str) -> str:
+    """Probeer taalcode te herleiden uit streamnaam-prefix (bijv. 'NL - Titel' → 'nl')."""
+    name = (stream_name or "").strip()
+    # Prefix vóór eerste spatie of koppelteken, max 3 tekens, alleen letters
+    m = re.match(r'^([A-Za-z]{2,3})[\s\-]', name)
+    if m:
+        prefix = m.group(1).lower()
+        # Alleen accepteren als bekende taalcode of in LANG_MAP
+        known = set(_LANG_MAP.keys()) | set(_LANG_MAP.values())
+        if prefix in known:
+            return prefix
+    return ""
+
+def _lang_ok(langs: list, wanted_lang: str, stream_name: str = "",
+             block_unknown: bool = False) -> bool:
     if not wanted_lang: return True
-    if not langs: return True   # geen taalinformatie = niet blokkeren
     w2 = wanted_lang.lower()
     w3 = _LANG_MAP.get(w2, w2)
-    norm = [l.lower() for l in langs if l]
-    return w2 in norm or w3 in norm
+
+    # 1. Controleer audiotrack-metadata
+    if langs:
+        norm = [l.lower() for l in langs if l]
+        if w2 in norm or w3 in norm:
+            return True
+        # Metadata aanwezig maar taal niet gevonden → blokkeren
+        return False
+
+    # 2. Geen metadata — probeer taal uit naam
+    detected = _lang_from_name(stream_name)
+    if detected:
+        return detected == w2 or detected == w3
+
+    # 3. Taal volledig onbekend
+    return not block_unknown  # blokkeren als instelling aan staat
 
 _wishlist_lock = threading.Lock()
 _wishlist_notifications: list = []   # toast berichten voor de UI
@@ -1994,7 +2035,7 @@ def _wishlist_worker():
             changed = False
 
             # Niets te doen → cache niet inladen
-            active = [i for i in items if i.get("status") not in ("toegevoegd_bibliotheek", "gedownload", "in_queue")]
+            active = [i for i in items if i.get("status") not in ("toegevoegd_bibliotheek", "gedownload")]
             if not active:
                 continue  # finally handelt de sleep af
 
@@ -2033,11 +2074,15 @@ def _wishlist_worker():
             if x.get("port") and str(x.get("port")) not in ["0", "80", "443"]:
                 base = f"{base}:{x['port']}"
 
+            wl_cfg            = cfg.get("wishlist", {})
+            quality_mode      = wl_cfg.get("quality_mode", "medium")
+            block_unknown_lang= wl_cfg.get("block_unknown_lang", False)
+
             probe_cache       = _load_probe_cache()
             probe_cache_dirty = False
 
             for item in items:
-                if item.get("status") in ("toegevoegd_bibliotheek", "gedownload", "in_queue"):
+                if item.get("status") in ("toegevoegd_bibliotheek", "gedownload"):
                     continue
 
                 tmdb_id     = str(item.get("tmdb_id", "")).strip()
@@ -2103,9 +2148,11 @@ def _wishlist_worker():
                         best_quality = f"{height}p"
                         best_langs   = langs
 
-                    if not _height_ok(height, min_quality):
+                    if not _height_ok(height, min_quality, quality_mode):
                         continue
-                    if not _lang_ok(langs, wanted_lang.lower()):
+                    if not _lang_ok(langs, wanted_lang.lower(),
+                                    stream_name=cand.get("name", ""),
+                                    block_unknown=block_unknown_lang):
                         continue
 
                     match = cand
@@ -2161,6 +2208,8 @@ def _wishlist_worker():
                     _wishlist_notifications.append(
                         {"title": title, "ts": datetime.datetime.now().isoformat(timespec="seconds")}
                     )
+                    if len(_wishlist_notifications) > 20:
+                        _wishlist_notifications[:] = _wishlist_notifications[-20:]
 
             if probe_cache_dirty:
                 _save_probe_cache(probe_cache)
