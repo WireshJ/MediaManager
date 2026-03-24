@@ -56,6 +56,37 @@ Voeg films en series toe aan de wishlist vanuit Discover. De app controleert aut
 
 Als de film gevonden is maar de automatische criteria niet matchen, klik je op de poster in de wishlist. Je ziet alle beschikbare versies bij de provider en kunt er één handmatig als `.strm` aanmaken.
 
+### Instellingen (via ⚙️ Instellingen → Wishlist)
+
+| Instelling | Beschrijving |
+|------------|-------------|
+| **Ingeschakeld** | Zet de wishlist-worker aan of uit |
+| **Beschikbare taalfilters** | Bepaalt welke taalopties je ziet bij het toevoegen van een item (bijv. alleen EN en NL) |
+| **Kwaliteitsmatch** | Hoe strikt de kwaliteitscheck is (zie tabel hieronder) |
+| **Blokkeer onbekende talen** | Streams zonder taalmetadata automatisch overslaan (zie hieronder) |
+
+#### Kwaliteitsmatch modi
+
+| Modus | 4K | 1080p | 720p | Wanneer gebruiken |
+|-------|----|-------|------|-------------------|
+| **Hoog** | ≥ 2160p | ≥ 1080p | ≥ 720p | Alleen exacte standaard 16:9 resoluties |
+| **Medium** *(standaard)* | ≥ 1440p | ≥ 800p | ≥ 520p | Inclusief widescreen (bijv. 1600p = 4K cinemascope) |
+| **Laag** | ≥ 1080p | ≥ 600p | ≥ 360p | Ruime drempel, ook lagere encodes van dezelfde kwaliteitsklasse |
+
+> Tip: gebruik **Medium** als je films met een cinemascope-ratio (2.39:1) wilt meenemen. Een 4K film op dat formaat heeft hoogte ≈ 1600px in plaats van 2160px.
+
+#### Blokkeer onbekende talen
+
+De app detecteert taal op drie manieren (in volgorde):
+1. **Audio-metadata** uit de stream (meest betrouwbaar)
+2. **Naam-prefix** — bijv. `NL - Titel` of `EN - Titel`
+3. **Onbekend** — bijv. `AMZ - Titel` geeft geen taalinformatie
+
+| Instelling | Gedrag bij onbekende taal |
+|------------|--------------------------|
+| **Uit** *(standaard)* | Stream wordt altijd geaccepteerd |
+| **Aan** | Stream wordt overgeslagen → status `Gevonden` → handmatig kiezen |
+
 ---
 
 ## 🐳 Docker installatie
