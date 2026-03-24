@@ -227,6 +227,16 @@ body {
   pointer-events: none; display: none;
 }
 .poster-card.selected .selected-overlay { display: block; }
+.poster-card-downloaded { cursor: default; }
+.poster-card-downloaded:hover { transform: none; border-color: transparent; box-shadow: none; }
+.dl-badge {
+  position: absolute; bottom: 48px; right: 8px;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: #1a6fd4; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; z-index: 5; pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0,0,0,.5);
+}
 .poster-info { padding: 7px 9px; }
 .poster-title { font-size: 0.79rem; color: #eee; font-weight: 600; line-height: 1.3;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -314,9 +324,18 @@ body {
   align-items: flex-start; transition: background .15s;
 }
 .serie-card-header:hover { background: #2a2a2a; }
+.serie-thumb-wrap { position: relative; flex-shrink: 0; width: 60px; }
 .serie-thumb { width: 60px; min-width: 60px; height: 90px; object-fit: cover; border-radius: 5px; background: #111; }
 .serie-thumb-ph { width: 60px; min-width: 60px; height: 90px; background: linear-gradient(135deg,#222,#111);
   border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 1.6rem; }
+.dl-badge-serie {
+  position: absolute; bottom: 4px; right: 4px;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: #1a6fd4; color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; pointer-events: none;
+  box-shadow: 0 2px 5px rgba(0,0,0,.6);
+}
 .serie-card-meta { flex: 1; min-width: 0; }
 .serie-card-title { font-size: 0.95rem; font-weight: 700; color: #fff; margin-bottom: 3px; }
 .serie-card-sub { font-size: 0.75rem; display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 5px; }
@@ -341,6 +360,16 @@ body {
 .episode-row:hover { background: #333; }
 .episode-row input { accent-color: var(--accent); transform: scale(1.2); }
 .episode-row label { font-size: 0.82rem; color: #ccc; cursor: pointer; line-height: 1.3; flex: 1; }
+.episode-row input[type="checkbox"] { flex-shrink: 0; width: 16px; height: 16px; transform: none; accent-color: var(--accent); }
+.episode-downloaded { cursor: default; opacity: 0.7; }
+.episode-downloaded:hover { background: transparent; }
+.episode-downloaded label { cursor: default; color: #999; }
+.ep-dl-icon {
+  flex-shrink: 0; width: 16px; height: 16px; border-radius: 50%;
+  background: #1a6fd4; color: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 700;
+}
 
 /* Buttons small */
 .btn-sm-dark {

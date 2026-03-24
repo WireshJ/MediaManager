@@ -6,7 +6,7 @@ from flask import Flask, render_template, request, redirect, url_for, jsonify, f
 from pathlib import Path
 import requests as _requests
 
-__version__ = "1.2.2"
+__version__ = "1.2.3"
 
 app = Flask(__name__)
 
@@ -37,8 +37,11 @@ def inject_globals():
 app.jinja_env.filters['basename'] = lambda p: Path(p).name
 app.jinja_env.filters['display_name'] = lambda p: (
     Path(p.split("|")[1]).stem if "|" in p and p.startswith(("__smb__:", "__ftp__:"))
-    else Path(p).name
+    else Path(p).stem
 )
+
+# ── Video extensies ────────────────────────────────────────────────
+_VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".ts", ".m2ts", ".mov"}
 
 # ── Paden ─────────────────────────────────────────────────────────
 BASE_DIR  = Path(__file__).parent
@@ -650,10 +653,13 @@ def detect_season(path):
 
 def group_seasons(eps):
     b = defaultdict(list)
-    for ep in eps: b[detect_season(ep)].append(ep)
-    for k in b: b[k].sort()
-    nums = sorted(k for k in b if isinstance(k,int))
-    od = OrderedDict([(f"Seizoen {n}",b[n]) for n in nums])
+    for ep in eps:
+        path = ep["path"] if isinstance(ep, dict) else ep
+        b[detect_season(path)].append(ep)
+    for k in b:
+        b[k].sort(key=lambda e: e["path"] if isinstance(e, dict) else e)
+    nums = sorted(k for k in b if isinstance(k, int))
+    od = OrderedDict([(f"Seizoen {n}", b[n]) for n in nums])
     if "Specials" in b: od["Specials"] = b["Specials"]
     return od
 
@@ -666,23 +672,42 @@ def scan_local(cfg):
     base = Path(cfg["output"]["base"])
     mdir = base / cfg["output"]["movies"]
     sdir = base / cfg["output"]["series"]
-    films: List[str] = []
-    seen_films: set[str] = set()
+
+    # Films: group by stem, video file wins over .strm
+    films_map: Dict[str, dict] = {}
     if mdir.exists():
-        for root,_,files in os.walk(mdir):
+        for root, _, files in os.walk(mdir):
             for f in files:
-                if f.endswith(".strm"):
-                    stem = Path(f).stem.lower()
-                    if stem not in seen_films:
-                        seen_films.add(stem); films.append(os.path.join(root,f))
-    series_dict: Dict[str,List] = {}
+                ext = Path(f).suffix.lower()
+                is_video = ext in _VIDEO_EXTS
+                if ext != ".strm" and not is_video:
+                    continue
+                stem = Path(f).stem.lower()
+                full = os.path.join(root, f)
+                existing = films_map.get(stem)
+                if existing is None or is_video:
+                    films_map[stem] = {"path": full, "downloaded": is_video}
+    films = list(films_map.values())
+
+    # Series: group by serie name and episode stem, video wins over .strm
+    series_map: Dict[str, Dict[str, dict]] = {}
     if sdir.exists():
-        for root,_,files in os.walk(sdir):
+        for root, _, files in os.walk(sdir):
             for f in files:
-                if f.endswith(".strm"):
-                    rel = Path(root).relative_to(sdir).parts
-                    sname = rel[0] if rel else _extract_serie_name(f)
-                    series_dict.setdefault(sname,[]).append(os.path.join(root,f))
+                ext = Path(f).suffix.lower()
+                is_video = ext in _VIDEO_EXTS
+                if ext != ".strm" and not is_video:
+                    continue
+                rel = Path(root).relative_to(sdir).parts
+                sname = rel[0] if rel else _extract_serie_name(f)
+                stem = Path(f).stem.lower()
+                full = os.path.join(root, f)
+                eps = series_map.setdefault(sname, {})
+                existing = eps.get(stem)
+                if existing is None or is_video:
+                    eps[stem] = {"path": full, "downloaded": is_video}
+
+    series_dict = {sname: list(eps.values()) for sname, eps in series_map.items()}
     return films, series_dict
 
 # ── Storage backend ───────────────────────────────────────────────
@@ -816,42 +841,50 @@ def _smb_put(local_path: str, remote_subpath: str, cfg: Dict) -> bool:
         print(f"[!] SMB upload fout ({remote_subpath}): {e}")
         return False
 
-def _smb_list_strm(cfg: Dict) -> tuple[List[str], Dict[str,List[str]]]:
-    films: List[str] = []
-    series_dict: Dict[str,List[str]] = {}
-    seen_films: set[str] = set()
+def _smb_list_strm(cfg: Dict) -> tuple[List[dict], Dict[str, List[dict]]]:
+    seen_films: Dict[str, dict] = {}
+    series_map: Dict[str, Dict[str, dict]] = {}
     try:
         conn, share = _smb_connect(cfg)
         s = _smb_cfg(cfg)
 
         def _walk(remote_dir: str, kind: str, serie_name: Optional[str] = None, depth: int = 0):
-            if depth > 4: return  # max recursie diepte
+            if depth > 4: return
             try: items = conn.listPath(share, remote_dir)
             except Exception as e: print(f"[!] SMB walk ({remote_dir}): {e}"); return
             for item in items:
-                if item.filename in (".",".."): continue
+                if item.filename in (".", ".."): continue
                 rpath = f"{remote_dir}/{item.filename}"
                 if item.isDirectory:
                     n = safe_fn(strip_prefix(item.filename))
-                    n = re.sub(r'\s*\(\d{4}\)','',n).strip()
-                    n = re.sub(r'\s*\([A-Z]{2}\)$','',n).strip()
-                    _walk(rpath, kind, n or item.filename, depth+1)
-                elif item.filename.endswith(".strm"):
-                    cn = _clean_strm_name(item.filename)
+                    n = re.sub(r'\s*\(\d{4}\)', '', n).strip()
+                    n = re.sub(r'\s*\([A-Z]{2}\)$', '', n).strip()
+                    _walk(rpath, kind, n or item.filename, depth + 1)
+                else:
+                    ext = Path(item.filename).suffix.lower()
+                    is_video = ext in _VIDEO_EXTS
+                    if ext != ".strm" and not is_video: continue
+                    cn = _clean_strm_name(item.filename) if ext == ".strm" else item.filename
                     vp = f"__smb__:{kind}:{rpath}|{cn}"
+                    stem = Path(cn).stem.lower()
                     if kind == "films":
-                        stem = Path(cn).stem.lower()
-                        if stem not in seen_films:
-                            seen_films.add(stem); films.append(vp)
+                        existing = seen_films.get(stem)
+                        if existing is None or is_video:
+                            seen_films[stem] = {"path": vp, "downloaded": is_video}
                     else:
                         sname = serie_name or _extract_serie_name(cn)
-                        series_dict.setdefault(sname,[]).append(vp)
+                        eps = series_map.setdefault(sname, {})
+                        existing = eps.get(stem)
+                        if existing is None or is_video:
+                            eps[stem] = {"path": vp, "downloaded": is_video}
 
-        _walk(s.get("films_path","Films"),  "films")
-        _walk(s.get("series_path","Series"), "series")
+        _walk(s.get("films_path", "Films"),  "films")
+        _walk(s.get("series_path", "Series"), "series")
         conn.close()
     except Exception as e:
         print(f"[!] SMB list fout: {e}")
+    films = list(seen_films.values())
+    series_dict = {sn: list(eps.values()) for sn, eps in series_map.items()}
     return films, series_dict
 
 def smb_test(cfg: Dict) -> dict:
@@ -893,10 +926,9 @@ def _ftp_put(local_path: str, remote_subpath: str, cfg: Dict) -> bool:
     except Exception as e:
         print(f"[!] FTP upload fout: {e}"); return False
 
-def _ftp_list_strm(cfg: Dict) -> tuple[List[str], Dict[str,List[str]]]:
-    films: List[str] = []
-    series_dict: Dict[str,List[str]] = {}
-    seen_films: set[str] = set()
+def _ftp_list_strm(cfg: Dict) -> tuple[List[dict], Dict[str, List[dict]]]:
+    seen_films: Dict[str, dict] = {}
+    series_map: Dict[str, Dict[str, dict]] = {}
     try:
         import ftplib
         ftp = _ftp_connect(cfg)
@@ -916,25 +948,34 @@ def _ftp_list_strm(cfg: Dict) -> tuple[List[str], Dict[str,List[str]]]:
                 rfp  = f"{remote_dir}/{name}"
                 if is_dir:
                     n = safe_fn(strip_prefix(name))
-                    n = re.sub(r'\s*\(\d{4}\)','',n).strip()
-                    n = re.sub(r'\s*\([A-Z]{2}\)$','',n).strip()
-                    _walk(rfp, kind, n or name, depth+1)
-                elif name.endswith(".strm"):
-                    cn = _clean_strm_name(name)
+                    n = re.sub(r'\s*\(\d{4}\)', '', n).strip()
+                    n = re.sub(r'\s*\([A-Z]{2}\)$', '', n).strip()
+                    _walk(rfp, kind, n or name, depth + 1)
+                else:
+                    ext = Path(name).suffix.lower()
+                    is_video = ext in _VIDEO_EXTS
+                    if ext != ".strm" and not is_video: continue
+                    cn = _clean_strm_name(name) if ext == ".strm" else name
                     vp = f"__ftp__:{kind}:{rfp}|{cn}"
+                    stem = Path(cn).stem.lower()
                     if kind == "films":
-                        stem = Path(cn).stem.lower()
-                        if stem not in seen_films:
-                            seen_films.add(stem); films.append(vp)
+                        existing = seen_films.get(stem)
+                        if existing is None or is_video:
+                            seen_films[stem] = {"path": vp, "downloaded": is_video}
                     else:
                         sname = serie_name or _extract_serie_name(cn)
-                        series_dict.setdefault(sname,[]).append(vp)
+                        eps = series_map.setdefault(sname, {})
+                        existing = eps.get(stem)
+                        if existing is None or is_video:
+                            eps[stem] = {"path": vp, "downloaded": is_video}
 
-        _walk(fc.get("films_path","/media/Films"),  "films")
-        _walk(fc.get("series_path","/media/Series"), "series")
+        _walk(fc.get("films_path", "/media/Films"),  "films")
+        _walk(fc.get("series_path", "/media/Series"), "series")
         ftp.quit()
     except Exception as e:
         print(f"[!] FTP list fout: {e}")
+    films = list(seen_films.values())
+    series_dict = {sn: list(eps.values()) for sn, eps in series_map.items()}
     return films, series_dict
 
 def ftp_test(cfg: Dict) -> dict:
@@ -1454,9 +1495,14 @@ def library():
         return redirect(url_for("library"))
     films_raw, series_raw = storage_list_strm(cfg)
     tk = cfg["tmdb"]["api_key"] if cfg["tmdb"].get("enabled") else ""
-    films  = [{"path":f, "info":tmdb_movie(f,tk) if tk else {}} for f in films_raw]
-    series = {sn: {"info":tmdb_series(sn,tk) if tk else {}, "seasons":group_seasons(eps)}
-              for sn,eps in series_raw.items()}
+    films = [{"path": f["path"], "downloaded": f["downloaded"],
+              "info": tmdb_movie(f["path"], tk) if tk else {}} for f in films_raw]
+    series = {}
+    for sn, eps in series_raw.items():
+        all_dl = bool(eps) and all(e["downloaded"] for e in eps)
+        series[sn] = {"info": tmdb_series(sn, tk) if tk else {},
+                      "seasons": group_seasons(eps),
+                      "all_downloaded": all_dl}
     return render_template("library.html", films=films, series=series)
 
 @app.get("/queue")

@@ -48,7 +48,26 @@
       {% if films %}
       <div class="poster-grid" id="film-grid">
         {% for film in films %}
-        {% set display = film.info.title if film.info.title else film.path | display_name | replace('.strm','') %}
+        {% set display = film.info.title if film.info.title else film.path | display_name %}
+        {% if film.downloaded %}
+        <div class="poster-card poster-card-downloaded">
+          {% if film.info.poster %}
+            <img class="poster-img" src="{{ film.info.poster }}" alt="{{ display }}" loading="lazy">
+          {% else %}
+            <div class="poster-placeholder">🎬</div>
+          {% endif %}
+          <div class="dl-badge" title="Gedownload">↓</div>
+          <div class="poster-info">
+            <div class="poster-title">{{ display }}</div>
+            <div class="poster-meta">
+              {% if film.info.year %}<span>{{ film.info.year }}</span>{% endif %}
+              {% if film.info.rating and film.info.rating > 0 %}
+                <span class="poster-rating">★ {{ film.info.rating }}</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% else %}
         <div class="poster-card" onclick="toggleFilm(this)">
           <input type="checkbox" name="selected_files" value="{{ film.path }}"
                  onchange="updateBar()" onclick="event.stopPropagation()">
@@ -68,10 +87,11 @@
             </div>
           </div>
         </div>
+        {% endif %}
         {% endfor %}
       </div>
       {% else %}
-      <p class="lib-empty">Geen .strm bestanden gevonden in de films map.</p>
+      <p class="lib-empty">Geen bestanden gevonden in de films map.</p>
       {% endif %}
     </div>
   </div>
@@ -99,11 +119,16 @@
         {% set info = serie_data.info %}
         <div class="serie-card" id="{{ sid }}-card">
           <div class="serie-card-header" onclick="toggleSerie('{{ sid }}')">
-            {% if info.poster %}
-              <img class="serie-thumb" src="{{ info.poster }}" alt="{{ serie_name }}" loading="lazy">
-            {% else %}
-              <div class="serie-thumb-ph">📺</div>
-            {% endif %}
+            <div class="serie-thumb-wrap">
+              {% if info.poster %}
+                <img class="serie-thumb" src="{{ info.poster }}" alt="{{ serie_name }}" loading="lazy">
+              {% else %}
+                <div class="serie-thumb-ph">📺</div>
+              {% endif %}
+              {% if serie_data.all_downloaded %}
+                <div class="dl-badge-serie" title="Volledig gedownload">↓</div>
+              {% endif %}
+            </div>
             <div class="serie-card-meta">
               <div class="serie-card-title">{{ info.title if info.title else serie_name }}</div>
               <div class="serie-card-sub">
@@ -134,11 +159,18 @@
               </div>
               <div class="episode-list" id="{{ ssid }}">
                 {% for ep in eps %}
-                <div class="episode-row" onclick="toggleEp(this,'{{ sid }}-card')">
-                  <input type="checkbox" name="selected_files" value="{{ ep }}"
-                         onchange="updateBar()" onclick="event.stopPropagation()">
-                  <label>{{ ep | display_name | replace('.strm','') }}</label>
+                {% if ep.downloaded %}
+                <div class="episode-row episode-downloaded">
+                  <span class="ep-dl-icon" title="Gedownload">↓</span>
+                  <label>{{ ep.path | display_name }}</label>
                 </div>
+                {% else %}
+                <div class="episode-row" onclick="toggleEp(this,'{{ sid }}-card')">
+                  <input type="checkbox" name="selected_files" value="{{ ep.path }}"
+                         onchange="updateBar()" onclick="event.stopPropagation()">
+                  <label>{{ ep.path | display_name }}</label>
+                </div>
+                {% endif %}
                 {% endfor %}
               </div>
             </div>
@@ -148,7 +180,7 @@
         {% endfor %}
       </div>
       {% else %}
-      <p class="lib-empty">Geen .strm bestanden gevonden in de series map.</p>
+      <p class="lib-empty">Geen bestanden gevonden in de series map.</p>
       {% endif %}
     </div>
   </div>
@@ -188,12 +220,14 @@ function updCard(id) {
 
 function toggleFilm(card) {
   const cb = card.querySelector('input');
+  if (!cb) return;
   cb.checked = !cb.checked;
   card.classList.toggle('selected', cb.checked);
   updateBar();
 }
 function toggleEp(row, cid) {
   const cb = row.querySelector('input');
+  if (!cb) return;
   cb.checked = !cb.checked;
   updCard(cid); updateBar();
 }
@@ -208,7 +242,7 @@ function selSeason(ssid, cid, v) {
   updCard(cid); updateBar();
 }
 function selAllFilms() {
-  document.querySelectorAll('#film-grid input').forEach(cb => {
+  document.querySelectorAll('#film-grid .poster-card:not(.poster-card-downloaded) input').forEach(cb => {
     cb.checked = true;
     cb.closest('.poster-card').classList.add('selected');
   });
@@ -217,7 +251,7 @@ function selAllFilms() {
 function deselAllFilms() {
   document.querySelectorAll('#film-grid input').forEach(cb => {
     cb.checked = false;
-    cb.closest('.poster-card').classList.remove('selected');
+    cb.closest('.poster-card')?.classList.remove('selected');
   });
   updateBar();
 }
